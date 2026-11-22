@@ -63,3 +63,37 @@ func TestJournalDownloadProducesCitationInReviewAndAutomatic(t *testing.T) {
 		})
 	}
 }
+
+func TestArxivDownloadUsesVerifiedFrontMatterInAutomaticMode(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	source := filepath.Join(root, "2403.01234v2.pdf")
+	ambiguous := filepath.Join(root, "2403.01235v2.pdf")
+	const target = "Example - 2024 - A Reliable Title from the First Page - arXiv 2403.01234v2.pdf"
+	var content strings.Builder
+	for i, line := range []string{
+		"A Reliable Title from the First Page", "Robin Example1,*",
+		"1 University Department", "arXiv:2403.01234v2 [cs.DL] 2 Apr 2024", "Abstract",
+	} {
+		fmt.Fprintf(&content, "BT /F1 12 Tf 72 %d Td (%s) Tj ET\n", 742-i*23, line)
+	}
+	writeTestPDFContent(t, source, content.String(), "<<>>")
+	writeTestPDFContent(t, ambiguous, "BT /F1 12 Tf 72 742 Td (arXiv:2403.01235v2 [cs.DL] 2 Apr 2024) Tj ET", "<<>>")
+	a, err := newApp(home, filepath.Join(home, "engine"), filepath.Join(home, "models"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { a.s.close(); a.chat.cancel() }()
+	a.online = nil
+	if err := a.startUIOperation(root, true, false, true, false, false, nil, nil, false, scanRename); err != nil {
+		t.Fatal(err)
+	}
+	state := waitForOperation(t, a)
+	if state.AutoRenamed != 1 {
+		t.Fatalf("want one automatic rename, got %d: %+v", state.AutoRenamed, a.s.plans)
+	}
+	for _, expected := range []string{filepath.Join(root, target), ambiguous} {
+		if _, err := os.Stat(expected); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

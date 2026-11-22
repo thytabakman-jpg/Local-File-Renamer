@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const evidenceVersion = "3.3.0"
+const evidenceVersion = "3.4.0"
 const assessmentVersion = "2.8.0-llama-b12588"
 
 type assessmentCache struct {

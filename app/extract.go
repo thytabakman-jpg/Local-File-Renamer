@@ -31,7 +31,8 @@ import (
 type evidence struct {
 	Text, Title, Author, Year, Venue, Publisher, Kind, Note, Summary string
 	Photo                                                            []byte
-	ArticleFrontMatter                                               bool
+	ArticleFrontMatter, ArxivFrontMatter                             bool
+	ArxivID                                                          string
 }
 
 const excerpt = 10000
@@ -145,6 +146,9 @@ func pdfSample(path string, first, last int) (e evidence) {
 		}
 		text, err := p.GetPlainText(fonts)
 		if err == nil {
+			if i == 1 && !e.ArticleFrontMatter {
+				applyPreprintFrontMatter(p, chars(text, excerpt), &e)
+			}
 			out.WriteString(chars(text, excerpt))
 			out.WriteByte('\n')
 		}

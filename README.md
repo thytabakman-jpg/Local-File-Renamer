@@ -1,4 +1,4 @@
-# Local File Renamer 3.3
+# Local File Renamer 3.4
 
 Local File Renamer for Windows x64 proposes filename changes and file moves, and checks for duplicates. Setup installs for the current user and adds a Start menu shortcut. The launcher opens the app at `http://127.0.0.1:39173/`.
 
@@ -9,12 +9,12 @@ Choose a **Scan type** and a folder using the Windows picker or by pasting its p
 **Start new scan** builds a new file list. **Start fresh** also rereads files without using the assessment cache. **Resume saved scan** continues with the saved file list and scope. The inventory reports how many files it found, included and filtered out, plus folder counts. Open **Review** to inspect scan results. If the model is unavailable, new scans and resumes can use built-in analysis.
 
 - **File Renamer** proposes filename changes. Use **Run without local AI** for deterministic inspection or download a local model for image and assisted document analysis. You can also opt into folder renames and supported metadata repairs.
-- **Sorter** compares a file's evidence with folders in the scan and groups proposals by destination. It can suggest new subfolders when several files share a topic. Review the folder tree and select which files to move. Apply creates approved destination folders as needed and retains the original filenames. Undo returns moved files to their source folders.
+- **Sorter** compares a file's evidence with folders in the scan and groups proposals by destination. It can suggest new subfolders when several files share a topic. Open **Review proposed moves** when a scan completes, then review the folder tree and select which files to move. A scan without proposals explains the effective scope or why it found no eligible destination. Apply creates approved destination folders as needed and retains the original filenames. Undo returns moved files to their source folders.
 - **Duplicate Scanner** groups byte-identical files by SHA-256 and lists similar filenames with differing contents separately as possible duplicates. It runs without a model and reports results without changing files.
 
 A run can be paused, resumed, or opened from **Run history**. **Close app** saves completed work and stops the model. Windows Setup installs each version into a new program directory and updates the Start menu shortcut. If an earlier Renamer is still running, close it before opening the new version. Models, profiles, assessment cache, and run history are stored separately from the program files.
 
-Duplicate review lists exact copies by full-file hash and possible matches by name or matching text samples. Use **Compare files** to recheck either pair and open both previews. For exact copies, choose one file to keep and select the extras to send to the Windows Recycle Bin. Preview-only scans keep the recycle controls disabled. Duplicate scans make no changes while searching. Version order uses distinct explicit labels where available, and uncertain groups show modification times for review.
+Duplicate review lists exact copies by full-file hash and possible matches by name or matching text samples. In **Exact duplicates**, the app proposes a keeper per group, preferring filenames without a copy suffix and breaking ties by alphabetical path. You can change the keeper and uncheck extras. **Accept recommendations** reviews the selected groups together, revalidates their contents and sends approved extras to the Windows Recycle Bin. The receipt reports the actual outcome per group. Preview-only scans keep recycling disabled. In **Possible duplicates**, the app automatically compares the selected pair and shows an advisory recommendation. Use **Compare files** to open both previews. Complete text comparisons cover UTF-8 TXT and Markdown files up to 1 MiB. Other formats depend on the available extracted samples. Explicit version labels indicate order, and uncertain groups show modification times for review.
 
 ## Review a scan
 
@@ -53,13 +53,14 @@ General queries show Wikipedia results and a browser link for wider search. Set 
 | Type | Default filename pattern |
 | --- | --- |
 | Journal article | Author(s) - Year - Article Title - Journal |
+| Verified arXiv preprint | Author(s) - Version Year - Article Title - arXiv ID |
 | Academic book | Author(s) - Year - Book Title - Publisher |
 | Other book | Author(s) - Year - Book Title |
 | Course paper | Paper Title - Course Code - Version |
 
 The classification checklist tests journal article, academic book, other book, and course paper in order. It records the evidence for a match or for continuing to the next check. With no confirmed match, the Renamer can propose a general descriptive name. Publication detection uses citation signals in the file. Course rules require positive course evidence, such as a course-code field on a cover sheet or a recognized code in a structured coursework filename. Authorship alone does not establish coursework.
 
-A meaningful publication filename is retained when the proposed change would remove citation or descriptive details, including when fields cannot be verified. Missing citation fields appear in the report. Placeholder names may be previewed for generic source names. Automatic application requires supported fields, a lossless change, and an enabled category. The correction controls can record a reviewed classification or replacement filename. Reassessment can reuse cached evidence.
+A meaningful publication filename is retained when the proposed change would remove citation or descriptive details, including when fields cannot be verified. Missing citation fields appear in the report. Placeholder names may be previewed for generic source names. Automatic application requires supported fields, a lossless change, and an enabled category. Verified preprints use the article category. Automatic scans wait for PDF evidence before proposing names, including for files with code-like basenames. The correction controls can record a reviewed classification or replacement filename. Reassessment can reuse cached evidence.
 
 Readers cover text-based PDFs, modern Office/OpenDocument files, EPUB, ZIP/TAR listings, UTF-8 text, JPEG including JFIF and JPE, PNG, GIF, BMP, TIFF, WebP, and MP3/MP4-family title tags. Windows OCR can sample rendered PDF pages with the local model. The supported metadata edits are verified title and author fields in eligible PDFs and DOCX/DOCM files. The original bytes are retained for undo.
 
@@ -81,4 +82,4 @@ The connection can start and pause scans, read proposed changes and reports, man
 
 The MIT-licensed source includes `build-windows.sh`. It requires Go 1.27.4, Python 3, a POSIX shell, and the pinned [llama.cpp b12588](https://github.com/ggml-org/llama.cpp/releases/tag/b12588) CPU archive. Set `LLAMA_CPU_ZIP` to reuse a verified copy of the archive. Setup can offer Microsoft's signed Visual C++ runtime if it is missing.
 
-The application source and embedded browser interface are in `app/`. The Windows setup program is in `installer/`, and third-party licence terms are in `licenses/`. Run `go test ./...` for the Linux tests or `go run ./app` to start the app on a supported platform. Run `./build-windows.sh` to create `build/LocalFileRenamer-Installer-3.3.zip`. The ZIP contains a single Setup executable. To try real inference, set `LOCAL_RENAMER_ENGINE` to the llama.cpp directory and `LOCAL_RENAMER_MODELS` to the model files directory. Go modules, the engine archive, and GGUF weights are obtained separately from their pinned sources.
+The application source and embedded browser interface are in `app/`. The Windows setup program is in `installer/`, and third-party licence terms are in `licenses/`. Run `go test ./...` for the Linux tests or `go run ./app` to start the app on a supported platform. Run `./build-windows.sh` to create `build/LocalFileRenamer-Installer-3.4.zip`. The ZIP contains a single Setup executable. To try real inference, set `LOCAL_RENAMER_ENGINE` to the llama.cpp directory and `LOCAL_RENAMER_MODELS` to the model files directory. Go modules, the engine archive, and GGUF weights are obtained separately from their pinned sources.

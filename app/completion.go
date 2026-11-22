@@ -236,6 +236,8 @@ func (s *session) zeroChangeReason(busy bool, pending int) string {
 		return "Proposals await approval"
 	case receipt.Assessments.Failed > 0:
 		return "Assessment failed and produced no proposals"
+	case s.manifest.Operation == scanMove:
+		return "No eligible destination was found for the assessed files"
 	default:
 		return "Assessment produced no proposals"
 	}

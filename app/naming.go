@@ -292,6 +292,9 @@ func heuristicTitle(text string) string {
 	lines := textLines(text)
 	for i, line := range lines {
 		line = strings.TrimSpace(strings.TrimLeft(line, "# "))
+		if arxivStamp.MatchString(line) {
+			continue
+		}
 		if len(line) >= 12 && len(line) <= 120 && meaningful(line) && !strings.ContainsAny(line, "{}<>\t") &&
 			!strings.HasSuffix(line, ".") && !strings.Contains(strings.ToLower(line), "https://") {
 			if unfinishedTitle(line) {
@@ -418,6 +421,19 @@ func decideWithRules(name string, e evidence, a assessment, modelUsed bool, rule
 	kind, course := classification.Kind, classification.Course
 	if override == "course_paper" && course == "" {
 		course = courseworkCode(name, e, paper)
+	}
+	if (override == "" || override == "article") && strings.EqualFold(ext, ".pdf") && e.ArxivID != "" {
+		if !e.ArxivFrontMatter {
+			return decision{Name: name, Kind: "article", Unknown: true, Outcome: "Needs review",
+				Note: "Found an arXiv identifier, but the title and byline could not be verified"}
+		}
+		classification.Checks = append(classification.Checks, classificationCheck{"Preprint", "Yes", "Found the arXiv version stamp and the title and byline on the first page."})
+		author := authorLabel([]string{e.Author}, rules.AuthorFormat)
+		fromID := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(baseName(name)), "arxiv"))
+		d := decision{Name: rules.makeName([]string{author, e.Year, e.Title, "arXiv " + e.ArxivID}, ext),
+			Kind: "article", Strict: true, AutoEvidence: true, ReplaceDownloadID: fromID == e.ArxivID,
+			Reason: "Verified the first-page title, author and arXiv version date"}
+		return preservePublicationName(name, d)
 	}
 	switch override {
 	case "article", "academic_book", "book", "course_paper":
@@ -663,7 +679,7 @@ func decideGeneral(name string, e evidence, a assessment, modelUsed bool, rules 
 	}
 	frontTitle := matchingFrontTitle(current, e.Text)
 	title := clean(e.Title)
-	if !meaningful(title) || !oneOfFirstLines(title, e.Text) && strings.HasSuffix(strings.ToLower(title), strings.ToLower(ext)) {
+	if arxivStamp.MatchString(title) || !meaningful(title) || !oneOfFirstLines(title, e.Text) && strings.HasSuffix(strings.ToLower(title), strings.ToLower(ext)) {
 		title = ""
 	}
 	if first := heuristicTitle(e.Text); !meaningful(title) || unfinishedTitle(title) && strings.HasPrefix(first, title+" ") || betterTitle(title, first) {
@@ -673,7 +689,7 @@ func decideGeneral(name string, e evidence, a assessment, modelUsed bool, rules 
 		title = ""
 		d.Note = joinNote(d.Note, "The extracted PDF title may be incomplete")
 	}
-	if !unfinishedTitle(a.Title) && oneOfFirstLines(a.Title, e.Text) && (!meaningful(title) || betterTitle(title, a.Title)) {
+	if !arxivStamp.MatchString(a.Title) && !unfinishedTitle(a.Title) && oneOfFirstLines(a.Title, e.Text) && (!meaningful(title) || betterTitle(title, a.Title)) {
 		title = a.Title
 	}
 

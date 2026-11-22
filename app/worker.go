@@ -325,7 +325,8 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		}
 	}
 	cleaned := rules.cleanName(d.Name, false)
-	if cleaned != d.Name && (cleaned == name || windowsNameLength(cleaned) <= rules.MaxLength) {
+	formattingOnlyPDF := s.manifest.Auto && d.Name == name && strings.EqualFold(extension(name), ".pdf")
+	if !formattingOnlyPDF && cleaned != d.Name && (cleaned == name || windowsNameLength(cleaned) <= rules.MaxLength) {
 		if d.Name == name {
 			d.Outcome = "Cleanup proposed"
 			d.Reason = "Applied filename formatting and configured spelling rules"

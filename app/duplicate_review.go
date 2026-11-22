@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type duplicateMember struct {
@@ -18,7 +22,23 @@ type duplicateMember struct {
 	Modified      time.Time
 }
 
-var duplicateVersion = regexp.MustCompile(`(?i)(?:^|[ _\-\[(])(?:version|rev|draft|v)[ ._\-]*([1-9][0-9]*(?:\.[0-9]+)*)[\])]?$`)
+var duplicateVersion = regexp.MustCompile(`(?i)(?:^|[ _-]+|[\[(])(?:version|rev|draft|v)[ ._-]*([0-9]+(?:\.[0-9]+)*)[\])]?$`)
+var duplicateCopySuffix = regexp.MustCompile(`(?i)\s*(?:\([0-9]+\)|[ _-]+copy(?:[ _-]*[0-9]+)?)$`)
+
+func duplicateFilenameParts(stem string) (name, version string, copyName bool) {
+	name = stem
+	for {
+		if suffix := duplicateCopySuffix.FindStringIndex(name); suffix != nil {
+			name, copyName = name[:suffix[0]], true
+			continue
+		}
+		match := duplicateVersion.FindStringSubmatchIndex(name)
+		if match == nil || version != "" {
+			return strings.TrimRight(name, " _-"), version, copyName
+		}
+		name, version = name[:match[0]], name[match[2]:match[3]]
+	}
+}
 
 func (s *session) describeDuplicates(plans []record, reason string) duplicateGroup {
 	g := duplicateGroup{Grouping: reason}
@@ -32,11 +52,7 @@ func (s *session) describeDuplicates(plans []record, reason string) duplicateGro
 			member.Modified = time.Unix(0, item.Modified)
 		}
 		stem := baseName(filepath.Base(p.Path))
-		if match := duplicateVersion.FindStringSubmatch(stem); match != nil {
-			member.Version = match[1]
-		} else if version, explicit := readVersion(stem); explicit && version != pendingVersion {
-			member.Version = version
-		}
+		_, member.Version, _ = duplicateFilenameParts(stem)
 		if member.Version != "" {
 			numbered++
 			versionKey := member.Version
@@ -50,7 +66,20 @@ func (s *session) describeDuplicates(plans []record, reason string) duplicateGro
 		}
 		g.Members = append(g.Members, member)
 	}
-	if reason != "Identical file contents" {
+	if reason == "Identical file contents" {
+		slices.SortFunc(g.Members, func(a, b duplicateMember) int { return strings.Compare(a.Path, b.Path) })
+		keeper := g.Members[0]
+		g.KeeperReason = "If every name looks like a copy, keep the first path alphabetically."
+		for _, member := range g.Members {
+			_, _, copyName := duplicateFilenameParts(baseName(filepath.Base(member.Path)))
+			if !copyName {
+				keeper = member
+				g.KeeperReason = "Prefer a name without a copy suffix. Break ties by alphabetical path."
+				break
+			}
+		}
+		g.RecommendedKeeper = keeper.Index
+	} else {
 		switch {
 		case numbered == len(plans) && distinct:
 			g.VersionEvidence = "Order suggested by the version labels in the filenames. Compare contents to confirm the files are revisions."
@@ -85,7 +114,7 @@ func duplicateText(path string, st stamp) string {
 }
 
 type duplicateComparison struct {
-	Verdict, Detail string
+	Verdict, Detail, Recommendation string
 }
 
 func (a *application) duplicatePair(job string, first, second int) (string, record, record, error) {
@@ -150,9 +179,16 @@ func (a *application) compareDuplicateFiles(ctx context.Context, job string, fir
 		return duplicateComparison{}, err
 	}
 	if left.Digest == right.Digest {
-		return duplicateComparison{"Exact duplicate", "The full-file SHA-256 hashes match."}, nil
+		return duplicateComparison{"Exact duplicate", "The full-file SHA-256 hashes match.", "Keep one"}, nil
 	}
-	ltext, rtext := duplicateText(left.Path, lst), duplicateText(right.Path, rst)
+	ltext, lfull, err := comparisonText(ctx, root, rootPath, left, lst)
+	if err != nil {
+		return duplicateComparison{}, err
+	}
+	rtext, rfull, err := comparisonText(ctx, root, rootPath, right, rst)
+	if err != nil {
+		return duplicateComparison{}, err
+	}
 	lafter, lerr := fingerprint(left.Path)
 	rafter, rerr := fingerprint(right.Path)
 	if lerr != nil || rerr != nil || lafter != lst || rafter != rst {
@@ -160,72 +196,182 @@ func (a *application) compareDuplicateFiles(ctx context.Context, job string, fir
 	}
 	switch {
 	case ltext == "" || rtext == "":
-		return duplicateComparison{"Different files", "The file bytes differ. A text comparison is unavailable for this pair."}, nil
+		return duplicateComparison{"Different bytes", "Readable text was unavailable for at least one file.", "Needs your judgment"}, nil
+	case !lfull || !rfull:
+		if strings.EqualFold(ltext, rtext) {
+			return duplicateComparison{"Matching text samples", "The samples match. Unread portions or formatting may differ.", "Needs your judgment"}, nil
+		}
+		return duplicateComparison{"Different text samples", "The samples differ. A complete content comparison is unavailable.", "Needs your judgment"}, nil
 	case ltext == rtext:
-		return duplicateComparison{"Matching text samples", "The file bytes differ. The text samples match. Check the previews before treating these as copies."}, nil
-	default:
-		return duplicateComparison{"Different text samples", "The file bytes and the extracted text samples differ. Review both previews to check whether these are revisions."}, nil
+		if strings.EqualFold(extension(left.Path), extension(right.Path)) {
+			return duplicateComparison{"Matching complete text", "The complete text matches after normalizing line endings. This is an advisory comparison.", "Keep one"}, nil
+		}
+		return duplicateComparison{"Matching complete text", "The text matches, and the files use different formats.", "Needs your judgment"}, nil
 	}
+	leftWords, rightWords := strings.Fields(strings.ToLower(ltext)), strings.Fields(strings.ToLower(rtext))
+	shared := duplicateTextOverlap(leftWords, rightWords)
+	_, lv, _ := duplicateFilenameParts(baseName(filepath.Base(left.Path)))
+	_, rv, _ := duplicateFilenameParts(baseName(filepath.Base(right.Path)))
+	if lv != "" && rv != "" && compareVersionNumbers(lv, rv) != 0 && shared >= .35 {
+		return duplicateComparison{"Different complete text", "The complete texts share passages and the filenames carry different version labels.", "Keep both as versions"}, nil
+	}
+	if shared < .10 && min(len(leftWords), len(rightWords)) >= 5 {
+		return duplicateComparison{"Different complete text", "The full texts have little shared wording.", "Keep both as distinct files"}, nil
+	}
+	return duplicateComparison{"Different complete text", "The full texts differ. There is insufficient evidence to establish how they are related.", "Needs your judgment"}, nil
 }
 
-func (a *application) recycleExactDuplicates(ctx context.Context, job string, revision uint64, keep int, selected []int) (int, error) {
-	return a.recycleMatchedCopies(ctx, job, revision, keep, selected, recycleFile)
+// Complete comparison is limited to bounded, valid UTF-8 text files. Document
+// extraction is sampling only, so it cannot establish content equivalence.
+func comparisonText(ctx context.Context, root *os.Root, rootPath string, plan record, before stamp) (string, bool, error) {
+	const fullLimit = 1 << 20
+	ext := strings.ToLower(extension(plan.Path))
+	if (ext == ".txt" || ext == ".md") && before.Size <= fullLimit {
+		rel, err := filepath.Rel(rootPath, plan.Path)
+		if err != nil {
+			return "", false, err
+		}
+		f, err := root.Open(rel)
+		if err != nil {
+			return "", false, err
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(contextReader{ctx, f}, fullLimit+1))
+		if err != nil {
+			return "", false, err
+		}
+		digest := sha256.Sum256(data)
+		if hex.EncodeToString(digest[:]) != plan.Digest {
+			return "", false, errors.New("A file changed during comparison. Run a fresh duplicate scan.")
+		}
+		if len(data) <= fullLimit && utf8.Valid(data) && !strings.ContainsRune(string(data), 0) {
+			text := strings.TrimPrefix(string(data), "\uFEFF")
+			text = strings.TrimSuffix(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+			if strings.TrimSpace(text) != "" {
+				return text, true, nil
+			}
+		}
+	}
+	return duplicateText(plan.Path, before), false, nil
+}
+
+// A shared three-word sequence is stronger revision evidence than a shared word.
+func duplicateTextOverlap(left, right []string) float64 {
+	sequences := func(words []string) map[[3]string]bool {
+		seen := make(map[[3]string]bool)
+		for i := 2; i < len(words); i++ {
+			seen[[3]string{words[i-2], words[i-1], words[i]}] = true
+		}
+		return seen
+	}
+	l, r := sequences(left), sequences(right)
+	if len(l) == 0 || len(r) == 0 {
+		return 0
+	}
+	shared := 0
+	for sequence := range l {
+		if r[sequence] {
+			shared++
+		}
+	}
+	return float64(shared) / float64(min(len(l), len(r)))
+}
+
+type duplicateSelection struct {
+	Keep    int
+	Indices []int
+}
+
+type duplicateRecycleOutcome struct {
+	Kept      string
+	Requested int
+	Recycled  int
+}
+
+type duplicateRecycleReceipt struct {
+	Groups   []duplicateRecycleOutcome
+	Recycled int
 }
 
 func (a *application) recycleMatchedCopies(ctx context.Context, job string, revision uint64, keep int, selected []int, recycle func(string) error) (int, error) {
+	receipt, err := a.recycleDuplicateGroups(ctx, job, revision, []duplicateSelection{{Keep: keep, Indices: selected}}, recycle)
+	return receipt.Recycled, err
+}
+
+func (a *application) recycleDuplicateGroups(ctx context.Context, job string, revision uint64, groups []duplicateSelection, recycle func(string) error) (duplicateRecycleReceipt, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	var receipt duplicateRecycleReceipt
 	s := a.s
-	if s == nil || a.v.Job != job || a.v.Revision != revision || a.v.Busy || a.v.Closing || s.pending != nil || s.manifest.Operation != scanDuplicates || s.settings().Execution.Mode == "preview_only" || !s.liveDuplicate(keep) || len(selected) == 0 {
-		return 0, errors.New("Review the current exact duplicate group and confirm a copy to keep")
+	if s == nil || a.v.Job != job || a.v.Revision != revision || a.v.Busy || a.v.Closing || s.pending != nil || s.manifest.Operation != scanDuplicates || s.settings().Execution.Mode == "preview_only" || len(groups) == 0 {
+		return receipt, errors.New("Review exact duplicates in the current scan and choose the copies to recycle")
 	}
-	keeper := s.plans[keep]
-	seen := map[int]bool{keep: true}
-	for _, index := range selected {
-		if seen[index] || !s.liveDuplicate(index) || s.plans[index].Digest != keeper.Digest {
-			return 0, errors.New("Every selected file must be an exact copy of the file you chose to keep")
+	seen := make(map[int]bool)
+	for _, group := range groups {
+		if seen[group.Keep] || !s.liveDuplicate(group.Keep) || len(group.Indices) == 0 {
+			return receipt, errors.New("Choose one available keeper and at least one copy in each group")
 		}
-		seen[index] = true
+		seen[group.Keep] = true
+		keeper := s.plans[group.Keep]
+		for _, index := range group.Indices {
+			if seen[index] || !s.liveDuplicate(index) || s.plans[index].Digest != keeper.Digest {
+				return receipt, errors.New("Each selected copy must occur once and be byte-identical to its keeper")
+			}
+			seen[index] = true
+		}
+		receipt.Groups = append(receipt.Groups, duplicateRecycleOutcome{Kept: keeper.Path, Requested: len(group.Indices)})
 	}
 	if err := validateRoot(s.manifest.Root); err != nil {
-		return 0, err
+		return receipt, err
 	}
 	root, err := os.OpenRoot(s.manifest.Root)
 	if err != nil {
-		return 0, err
+		return receipt, err
 	}
 	defer root.Close()
-	keptStamp, err := recheckDuplicate(ctx, root, s.manifest.Root, keeper)
-	if err != nil {
-		return 0, err
+	for _, group := range groups {
+		for _, index := range append([]int{group.Keep}, group.Indices...) {
+			if _, err := recheckDuplicate(ctx, root, s.manifest.Root, s.plans[index]); err != nil {
+				return receipt, fmt.Errorf("Nothing recycled. %s: %w", filepath.Base(s.plans[index].Path), err)
+			}
+		}
 	}
 	defer a.syncSession(true)
-	moved := 0
-	for _, index := range selected {
-		plan := s.plans[index]
-		proof, err := recheckDuplicate(ctx, root, s.manifest.Root, plan)
+	for i, group := range groups {
+		keeper := s.plans[group.Keep]
+		keptStamp, err := recheckDuplicate(ctx, root, s.manifest.Root, keeper)
 		if err != nil {
-			return moved, err
+			return receipt, err
 		}
-		currentKept, err := fingerprint(keeper.Path)
-		if err != nil || currentKept != keptStamp || safeParent(s.manifest.Root, keeper.Path) != nil {
-			return moved, errors.New("The copy selected to keep is no longer available")
+		for _, index := range group.Indices {
+			if err := ctx.Err(); err != nil {
+				return receipt, err
+			}
+			plan := s.plans[index]
+			proof, err := recheckDuplicate(ctx, root, s.manifest.Root, plan)
+			if err != nil {
+				return receipt, fmt.Errorf("%s: %w", filepath.Base(plan.Path), err)
+			}
+			currentKept, err := fingerprint(keeper.Path)
+			if err != nil || currentKept != keptStamp || safeParent(s.manifest.Root, keeper.Path) != nil {
+				return receipt, errors.New("The copy selected to keep is no longer available")
+			}
+			if err := s.append(record{Type: "recycle-intent", Index: index, Path: plan.Path, Stamp: proof}); err != nil {
+				return receipt, err
+			}
+			recycleErr := recycle(plan.Path)
+			recordErr := s.finishRecycle()
+			if s.plans[index].Decision == removedFlaggedFile {
+				receipt.Groups[i].Recycled++
+				receipt.Recycled++
+			}
+			if err := errors.Join(recycleErr, recordErr); err != nil {
+				return receipt, fmt.Errorf("%s: %w", filepath.Base(plan.Path), err)
+			}
+			if s.plans[index].Decision != removedFlaggedFile {
+				return receipt, fmt.Errorf("The Recycle Bin did not remove %s", filepath.Base(plan.Path))
+			}
 		}
-		if err := ctx.Err(); err != nil {
-			return moved, err
-		}
-		if err := s.append(record{Type: "recycle-intent", Index: index, Path: plan.Path, Stamp: proof}); err != nil {
-			return moved, err
-		}
-		recycleErr := recycle(plan.Path)
-		recordErr := s.finishRecycle()
-		if err := errors.Join(recycleErr, recordErr); err != nil {
-			return moved, err
-		}
-		if s.plans[index].Decision != removedFlaggedFile {
-			return moved, fmt.Errorf("The Recycle Bin did not remove %s", filepath.Base(plan.Path))
-		}
-		moved++
 	}
-	return moved, nil
+	return receipt, nil
 }

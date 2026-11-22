@@ -585,6 +585,9 @@ func (a *application) run(ctx context.Context, s *session, partial bool) {
 	for i := startIndex; s.manifest.Operation != scanMove && i < s.fileCount && ctx.Err() == nil; i++ {
 		item := s.manifest.Items[i]
 		name := filepath.Base(item.Path)
+		if s.manifest.Auto && strings.EqualFold(extension(name), ".pdf") {
+			continue
+		}
 		cleaned := rules.cleanName(name, false)
 		if !item.Skip && cleaned != name && windowsNameLength(cleaned) <= rules.MaxLength && validProposedName(cleaned, name, false) {
 			cleanups = append(cleanups, proposalRow{Index: i, From: item.Path,

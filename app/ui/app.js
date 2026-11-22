@@ -344,7 +344,7 @@ async function action(name, fields = {}) {
     const r = await fetch("/api/action", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: name, ...fields }),
-      ...(["pick","recycle-duplicates"].includes(name) ? {} : {signal:AbortSignal.timeout(15000)})
+      ...(["pick","recycle-duplicates","recycle-duplicate-groups"].includes(name) ? {} : {signal:AbortSignal.timeout(15000)})
     });
     if (!r.ok) throw new Error((await r.text()).trim());
     if (name === "exit") {
@@ -407,7 +407,8 @@ function render(s) {
     actionMessage = s.StartError;
     scanStartRejected = true;
   }
-  const hadWork = Boolean(s.Job) && !s.StartingRoot && !s.StartError && !scanStartRejected;
+  const startFailed = !s.Busy && (scanStartRejected || Boolean(s.StartError));
+  const hadWork = Boolean(s.Job) && !s.StartingRoot && !startFailed;
   if (s.Job && lastJob !== s.Job) {
     if (!folderEdited) el("folder").value = s.Root;
     if (s.Operation) el("scan-operation").value = s.Operation;
@@ -418,8 +419,8 @@ function render(s) {
   const differentFolder = hadWork && folderKey(el("folder").value) !== folderKey(s.Root);
   const scanning = ["indexing", "starting", "files", "folders", "reassessing", "undo", "applying", "metadata"].includes(s.Phase);
 
-  el("phase").textContent = s.Pausing ? "Pausing…" : (phases[s.Phase] || s.Phase);
-  notice(actionMessage || s.Message || (s.Phase === "legacy-paused" ? "Start a new scan to review changes from this folder." : ""));
+  el("phase").textContent = startFailed ? "Scan failed" : s.Pausing ? "Pausing…" : (phases[s.Phase] || s.Phase);
+  notice(actionMessage || (startFailed && s.StartError) || s.Message || (s.Phase === "legacy-paused" ? "Start a new scan to review changes from this folder." : ""));
   show("model-panel", chosenOperation !== "duplicates" && !s.ModelReady);
   show("rename-options", chosenOperation === "rename");
   for (const id of ["partial", "media-samples"]) {
@@ -483,7 +484,11 @@ function render(s) {
   show("progress", hadWork || Boolean(s.StartingRoot));
   el("run-folder").textContent = s.Root || "";
   el("run-scope").textContent = s.ScopeDescription || "";
-  el("run-inventory").textContent = hadWork ? describeInventory(s) + (!s.Busy && s.OutcomeReason ? " · " + s.OutcomeReason : "") : (s.StartingRoot ? "Finding files…" : "Ready to start a scan");
+  el("run-inventory").textContent = hadWork ? describeInventory(s) + (!s.Busy && s.OutcomeReason ? " · " + s.OutcomeReason : "")
+    : s.StartingRoot ? "Finding files…" : startFailed ? "The scan could not start." : "Ready to start a scan";
+  const moveReview = hadWork && !s.Busy && !differentFolder && chosenOperation === "move" && s.Operation === "move" && s.Proposed > 0;
+  show("review-proposed-moves", moveReview);
+  el("review-proposed-moves").textContent = "Review " + (s.Proposed || 0).toLocaleString() + " proposed " + (s.Proposed === 1 ? "move" : "moves");
   const clock = s.Clock;
   const hasTiming = Boolean(hadWork && clock?.Started && !clock.Started.startsWith("0001"));
   show("run-time", hasTiming);
@@ -656,6 +661,7 @@ async function submitScan(fresh) {
   }
 }
 
+el("review-proposed-moves").onclick = () => selectView("review");
 el("start").onclick = () => submitScan(false);
 el("start-fresh").onclick = () => submitScan(true);
 el("resume").onclick = () => action("resume",{id:latest.Job,partial:latest.Partial || el("partial").checked});

@@ -28,11 +28,18 @@ func renderSamplePage(ctx context.Context, path string, page int) ([]byte, error
 	for i, code := range script {
 		binary.LittleEndian.PutUint16(encoded[i*2:], code)
 	}
-	cmd := exec.CommandContext(ctx, shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(encoded))
-	cmd.Env = append(os.Environ(), "LOCAL_RENAMER_OCR_INPUT="+path, "LOCAL_RENAMER_OCR_PAGE="+strconv.Itoa(page))
-	configureChild(cmd)
-	output, err := cmd.Output()
+	image, err := os.CreateTemp("", "renamer-preview-*.jpg")
 	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(image.Name())
+	if err := image.Close(); err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(encoded))
+	cmd.Env = append(os.Environ(), "LOCAL_RENAMER_OCR_INPUT="+path, "LOCAL_RENAMER_OCR_PAGE="+strconv.Itoa(page), "LOCAL_RENAMER_OCR_OUTPUT="+image.Name())
+	configureChild(cmd)
+	if _, err := cmd.Output(); err != nil {
 		var failed *exec.ExitError
 		if errors.As(err, &failed) && len(failed.Stderr) > 0 {
 			detail := strings.TrimSpace(string(failed.Stderr))
@@ -43,7 +50,7 @@ func renderSamplePage(ctx context.Context, path string, page int) ([]byte, error
 		}
 		return nil, errors.Join(err, ctx.Err())
 	}
-	return base64.StdEncoding.DecodeString(strings.TrimSpace(string(output)))
+	return os.ReadFile(image.Name())
 }
 
 const pdfPageScript = `
@@ -80,11 +87,11 @@ try {
     $options.DestinationWidth = [uint32][Math]::Max(1, $page.Size.Width * $scale)
     $options.DestinationHeight = [uint32][Math]::Max(1, $page.Size.Height * $scale)
     $render = $asAction.Invoke($null, @($page.RenderToStreamAsync($stream, $options)))
-    $render.GetAwaiter().GetResult()
+    $null = $render.GetAwaiter().GetResult()
     $reader = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($stream.GetInputStreamAt(0))
     try {
         $reader.CopyTo($copy)
-        [Console]::WriteLine([Convert]::ToBase64String($copy.ToArray()))
+        [System.IO.File]::WriteAllBytes($env:LOCAL_RENAMER_OCR_OUTPUT, $copy.ToArray())
     } finally { $reader.Dispose() }
 } finally { $copy.Dispose(); $stream.Dispose(); $page.Dispose() }
 `

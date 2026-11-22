@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 )
@@ -38,9 +37,10 @@ type moveFolder struct {
 }
 
 type duplicateGroup struct {
-	Files                     []string
-	Members                   []duplicateMember
-	Grouping, VersionEvidence string
+	Files                                   []string
+	Members                                 []duplicateMember
+	Grouping, VersionEvidence, KeeperReason string
+	RecommendedKeeper                       int
 }
 
 type operationResults struct {
@@ -308,13 +308,8 @@ func scopedDuplicateHash(ctx context.Context, root *os.Root, path string) (strin
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-var copySuffix = regexp.MustCompile(`(?i)\s*(?:\([0-9]+\)|[ _-]+(?:copy(?:[ _-]*[0-9]+)?|(?:version|rev|draft|v)[ _-]*[0-9]+(?:\.[0-9]+)*))$`)
-
 func similarFilename(path string) string {
-	stem := baseName(filepath.Base(path))
-	for trimmed := copySuffix.ReplaceAllString(stem, ""); trimmed != stem; trimmed = copySuffix.ReplaceAllString(stem, "") {
-		stem = trimmed
-	}
+	stem, _, _ := duplicateFilenameParts(baseName(filepath.Base(path)))
 	stem = norm(stem)
 	if !meaningful(stem) {
 		return ""

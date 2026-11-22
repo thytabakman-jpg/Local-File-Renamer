@@ -19,7 +19,11 @@ let recommendationOutcome = "";
 
 function selectView(view) {
   currentView = view;
-  if (view !== "review") {resetRecommendations(""); closeInlineName();}
+  if (view !== "review") {
+    stopDuplicateComparisons();
+    resetRecommendations("");
+    closeInlineName();
+  }
   for (const name of ["scan", "review", "history", "settings", "chat"]) show(name + "-view", name === view);
   for (const button of document.querySelectorAll("[data-view]")) button.setAttribute("aria-pressed", String(button.dataset.view === view));
   if (view === "chat") {
@@ -27,7 +31,10 @@ function selectView(view) {
     el("chat-folder").textContent = folder ? "Selected scan folder: " + folder : "Choose a folder in New scan or give its full path here.";
     el("chat-input").focus();
   }
-  if (view === "review") updateReview(latest);
+  if (view === "review") {
+    updateReview(latest);
+    startDuplicateComparisons();
+  }
 }
 
 function leaf(path) { return path?.split(/[\\/]/).at(-1) || ""; }

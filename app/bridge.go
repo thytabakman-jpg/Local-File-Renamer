@@ -54,7 +54,7 @@ type bridgeCommand struct {
 	MediaSamples *bool                      `json:"media_samples,omitempty"`
 }
 
-const appVersion = "3.3"
+const appVersion = "3.4"
 const bridgeVersion = 3
 
 func bridgeKeyPath(home string) string { return filepath.Join(home, "desktop-connection.key") }

@@ -16,7 +16,7 @@
   <main>
     <noscript><p>Enable JavaScript or open the app in another browser to use its controls.</p></noscript>
     <aside class="side-nav">
-      <div class="brand"><img class="mark" src="/mark.png" alt=""><h1>Local File Renamer <small id="app-version">3.3</small></h1></div>
+      <div class="brand"><img class="mark" src="/mark.png" alt=""><h1>Local File Renamer <small id="app-version">3.4</small></h1></div>
       <nav class="view-tabs" aria-label="Renamer views">
         <button type="button" id="scan-tab" data-view="scan" aria-pressed="true">New scan</button>
         <button type="button" data-view="review" aria-pressed="false">Review</button>
@@ -89,6 +89,7 @@
         <p id="run-folder" class="run-hint"></p><p id="run-scope" class="run-hint"></p><p id="run-inventory" class="run-hint"></p>
         <div id="prototype-progress-summary" class="summary" hidden><span id="count">0 items</span><span id="percent">0%</span></div>
         <progress id="progress" value="0" max="1" hidden></progress>
+        <div class="actions"><button id="review-proposed-moves" class="primary" type="button" hidden></button></div>
         <div id="current"></div>
         <p id="run-time" class="run-hint" hidden></p>
         <div class="counts">
@@ -121,6 +122,7 @@
           <div class="actions"><button id="operation-pause" class="secondary" hidden>Pause</button><button id="operation-undo" class="secondary" hidden>Undo moves</button><button id="operation-resume-apply" class="primary" hidden>Resume applying</button><button id="operation-bug-report" type="button" class="secondary">Copy bug report</button></div>
         </div>
         <p id="operation-status" role="status"></p>
+        <button id="retry-operation-results" class="secondary" type="button" hidden>Retry loading results</button>
         <div id="move-results" hidden>
           <section class="review-detail" aria-labelledby="move-destination">
             <h3 id="move-destination"></h3>
@@ -142,9 +144,12 @@
           </section>
         </div>
         <div id="duplicate-results" hidden>
-          <section data-duplicate-panel="exact" class="card"><h3>Exact duplicates</h3><div id="exact-duplicates"></div></section>
+          <section data-duplicate-panel="exact" class="card"><h3>Exact duplicates</h3>
+          <div id="exact-duplicates"></div>
+          <button id="accept-duplicate-recommendations" class="primary" type="button" hidden>Accept recommendations</button>
+          <div id="duplicate-recycle-receipt" role="status"></div></section>
           <section data-duplicate-panel="possible" class="card" hidden><h3>Possible duplicates</h3>
-          <p class="run-hint">Compare two candidates before deciding whether they are copies or revisions.</p>
+          <p class="run-hint">Recommendations compare the selected pair in each group. You can choose another pair and open both previews.</p>
           <div id="possible-duplicates"></div></section>
         </div>
       </section>

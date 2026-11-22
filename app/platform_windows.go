@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -55,7 +56,11 @@ func renameNoReplace(from, to string) error {
 	if err != nil {
 		return err
 	}
-	return windows.MoveFileEx(a, b, windows.MOVEFILE_WRITE_THROUGH)
+	err = windows.MoveFileEx(a, b, windows.MOVEFILE_WRITE_THROUGH)
+	if errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+		return fmt.Errorf("A file is open or in use. Close its viewer or preview and retry: %w", err)
+	}
+	return err
 }
 
 const recycleAvailable = true

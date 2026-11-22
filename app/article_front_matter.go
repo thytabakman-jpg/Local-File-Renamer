@@ -146,3 +146,35 @@ func applyArticleFrontMatter(lines []string, e *evidence) {
 		return
 	}
 }
+
+var arxivStamp = regexp.MustCompile(`(?im)^\s*arxiv\s*:\s*([0-9]{4}\.[0-9]{4,5}(?:v[1-9][0-9]*)?)\s+\[[^\]\r\n]+\][ \t]+[^\r\n]*\b(19[0-9]{2}|20[0-9]{2})\s*$`)
+var affiliationMarks = regexp.MustCompile(`[\s0-9,*†‡]+$`)
+var preprintAuthor = regexp.MustCompile(`^\p{Lu}[\p{L}\p{M}.'’\-]*(?: +\p{Lu}[\p{L}\p{M}.'’\-]*){1,4}$`)
+var compatibilityLigatures = strings.NewReplacer("ﬀ", "ff", "ﬁ", "fi", "ﬂ", "fl", "ﬃ", "ffi", "ﬄ", "ffl")
+
+func applyPreprintFrontMatter(p pdf.Page, firstPageText string, e *evidence) {
+	stamp := arxivStamp.FindStringSubmatch(firstPageText)
+	if stamp == nil {
+		return
+	}
+	e.ArxivID, e.Year = strings.ToLower(stamp[1]), stamp[2]
+	lines := layoutGlyphLines(p.Content().Text)
+	var heading []string
+	for _, line := range lines[:min(len(lines), 6)] {
+		if titleHeading.MatchString(line) || arxivStamp.MatchString(line) || affiliationMarks.MatchString(line) && affiliationMarks.ReplaceAllString(line, "") == "" {
+			continue
+		}
+		heading = append(heading, compatibilityLigatures.Replace(line))
+	}
+	for i, line := range heading[:min(len(heading), 4)] {
+		if i == 0 {
+			continue
+		}
+		author := clean(affiliationMarks.ReplaceAllString(line, ""))
+		title := strings.Join(heading[:i], " ")
+		if preprintAuthor.MatchString(author) && len(strings.Fields(title)) >= 4 && len(title) <= 210 && !unfinishedTitle(title) {
+			e.Title, e.Author, e.ArxivFrontMatter = title, author, true
+			return
+		}
+	}
+}

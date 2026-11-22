@@ -349,6 +349,7 @@ func server(a *application) *http.Server {
 			Fresh                                bool
 			Revision                             *uint64
 			Keep                                 *int
+			DuplicateGroups                      []duplicateSelection
 			RowRevisions                         map[int]uint64
 			Rules                                *namingRules
 			Filename                             *string
@@ -449,19 +450,38 @@ func server(a *application) *http.Server {
 			}
 		case "apply-one":
 			err = a.applyOneRevision(q.ID, q.Index, q.Revision)
-		case "recycle-duplicates":
+		case "recycle-duplicates", "recycle-duplicate-groups":
 			if !recycleAvailable {
 				err = fmt.Errorf("The Windows Recycle Bin is unavailable")
-			} else if q.Revision == nil || q.Keep == nil {
-				err = fmt.Errorf("Choose a file to keep and confirm the exact copies to recycle")
-			} else {
-				count, recycleErr := a.recycleExactDuplicates(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices)
-				if recycleErr == nil {
-					reply(w, map[string]int{"recycled": count})
-					return
-				}
-				err = fmt.Errorf("%d recycled. %w", count, recycleErr)
+				break
 			}
+			if q.Revision == nil {
+				err = fmt.Errorf("Confirm exact copies from the current scan")
+				break
+			}
+			if q.Action == "recycle-duplicates" {
+				if q.Keep == nil {
+					err = fmt.Errorf("Choose a file to keep")
+					break
+				}
+				count, recycleErr := a.recycleMatchedCopies(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices, recycleFile)
+				if recycleErr != nil {
+					err = fmt.Errorf("%d recycled. %w", count, recycleErr)
+					break
+				}
+				reply(w, map[string]int{"recycled": count})
+				return
+			}
+			receipt, recycleErr := a.recycleDuplicateGroups(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, recycleFile)
+			message := ""
+			if recycleErr != nil {
+				message = recycleErr.Error()
+			}
+			reply(w, struct {
+				duplicateRecycleReceipt
+				Error string
+			}{receipt, message})
+			return
 		case "recycle-file":
 			if q.Revision == nil || len(q.Indices) != 1 {
 				err = fmt.Errorf("Confirm one file from the current review")
