@@ -10,16 +10,17 @@
   <script src="/operations.js" defer></script>
   <script src="/review.js" defer></script>
   <script src="/chat.js" defer></script>
+  <script src="/console.js" defer></script>
 </head>
 <body>
   <main>
     <noscript><p>Enable JavaScript or open the app in another browser to use its controls.</p></noscript>
     <aside class="side-nav">
-      <div class="brand"><img class="mark" src="/mark.png" alt=""><h1>Local File Renamer <small id="app-version">3.2</small></h1></div>
+      <div class="brand"><img class="mark" src="/mark.png" alt=""><h1>Local File Renamer <small id="app-version">3.3</small></h1></div>
       <nav class="view-tabs" aria-label="Renamer views">
         <button type="button" id="scan-tab" data-view="scan" aria-pressed="true">New scan</button>
         <button type="button" data-view="review" aria-pressed="false">Review</button>
-        <button type="button" data-view="history" aria-pressed="false">History</button>
+        <button class="prototype-nav-secondary" type="button" data-view="history" aria-pressed="false">History</button>
         <button type="button" data-view="settings" aria-pressed="false">Settings</button>
         <button type="button" id="chat-tab" data-view="chat" aria-pressed="false">Local chat</button>
       </nav>
@@ -27,110 +28,159 @@
     </aside>
     <div class="workspace">
     <div id="message" role="status" hidden></div>
-    <section id="chat-view" class="card" hidden aria-labelledby="chat-title">
-      <div class="section-title"><div><h2 id="chat-title">Local chat</h2><p>Ask about your files, control the current scan, or search online.</p></div><button type="button" id="reset-chat" class="quiet">New conversation</button></div>
+    <section id="chat-view" hidden aria-labelledby="chat-title">
+      <header class="prototype-page-header"><h2 class="page-title" id="chat-title">Local chat</h2></header>
+      <div class="prototype-page-grid"><aside class="prototype-page-rail"><div class="prototype-rail-cap">Quick actions</div><div class="prototype-chat-prompts" aria-label="Example questions">
+        <button type="button" class="secondary" data-chat-example="Show auto-renamed files">Show auto-renamed files</button>
+        <button type="button" class="secondary" data-chat-example="Show flagged files">Show flagged files</button>
+      </div></aside><section class="card prototype-chat-card"><div class="section-title"><div><p>Ask about your files, control the current scan, or search online.</p></div><button type="button" id="reset-chat" class="quiet">New conversation</button></div>
       <div class="actions">
         <label for="chat-model">Model</label>
         <select id="chat-model"><option value="configured">Renamer default</option><option value="qwen3.5-4b">Qwen3.5-4B</option><option value="qwen2.5-vl-3b">Qwen2.5-VL-3B</option></select>
       </div>
-      <p id="chat-folder" class="run-hint"></p>
+      <div class="prototype-chat-context">
+        <p id="chat-folder" class="run-hint"></p><p id="prototype-chat-run"></p>
+      </div>
       <div id="chat-log" role="log" aria-label="Local chat messages"></div>
       <form id="chat-form">
         <label for="chat-input">Message</label>
         <textarea id="chat-input" rows="3" maxlength="2500" placeholder="Search online for a topic or check the year for proposal 0"></textarea>
         <div class="actions"><button id="chat-send" type="submit" class="primary">Send</button><span id="chat-status" role="status"></span></div>
       </form>
+      </section></div>
     </section>
     <div id="scan-view">
-    <section id="model-panel" class="model" hidden>
-      <div><h2>Set up local AI</h2><p><span id="model-name">Download Qwen3.5-4B once (3.4 GB).</span> It reads images and helps name files on your PC.</p>
-      </div>
-      <button id="model" class="secondary">Download model</button>
-      <progress id="download-progress" hidden value="0" max="1"></progress>
-      <p id="download-status" hidden></p>
-    </section>
-    <section class="card">
-      <div class="section-title"><div><h2 class="page-title">New scan</h2><p id="active-profile"></p></div><span id="phase" class="status">Ready</span></div>
-      <label for="scan-operation">Scan type</label>
-      <select id="scan-operation">
+    <div id="scan-console">
+      <aside class="prototype-rail" id="prototype-scan-rail">
+        <div class="prototype-rail-cap" aria-hidden="true">Scan type</div>
+      <fieldset id="prototype-scan-types">
+        <legend>Scan type</legend>
+        <div class="prototype-options">
+          <label><input type="radio" name="prototype-scan-type" value="rename" checked><span>Rename files</span></label>
+          <label><input type="radio" name="prototype-scan-type" value="move"><span>Move files</span></label>
+          <label><input type="radio" name="prototype-scan-type" value="duplicates"><span>Find duplicates</span></label>
+        </div>
+      </fieldset>
+      </aside>
+      <div class="prototype-console-content">
+      <header class="prototype-console-heading">
+        <div><h2 class="page-title">New scan</h2><p id="active-profile"></p><span id="phase" class="status">Ready</span></div>
+        <button id="start" class="primary" type="button">Start new scan</button>
+      </header>
+      <section class="card prototype-scan-form">
+      <select id="scan-operation" hidden aria-label="Scan type">
         <option value="rename">File Renamer</option>
-        <option value="move">Sorter</option>
-        <option value="duplicates">Duplicate Scanner</option>
+        <option value="move">File Mover</option>
+        <option value="duplicates">Duplicate Check</option>
       </select>
       <label for="folder">Folder</label>
       <div class="picker"><input id="folder" type="text" autocomplete="off" placeholder="Choose a folder or enter its path"><button id="pick" class="secondary">Choose folder</button></div>
-      <button type="button" class="quiet" id="scan-settings-link">Scan settings</button>
-      <p id="selected-scan-folder" class="run-hint" hidden></p>
-      <p id="profile-scope" class="run-hint" hidden></p>
       <div class="actions">
-        <button id="start" class="primary">Run</button>
-        <button id="start-fresh" class="secondary" title="Rebuild the file list and reread the files using these settings">Start fresh</button>
+        <button id="start-fresh" class="secondary" type="button" title="Run again without reusing saved assessments">Start fresh</button>
+        <button type="button" class="quiet" id="scan-settings-link">Scan settings</button>
         <button id="resume" class="primary" hidden>Resume saved scan</button>
         <button id="restore-run-folder" class="secondary" hidden>Use saved scan folder</button>
         <button id="pause" class="secondary" hidden>Pause</button>
         <button id="undo" class="quiet" hidden>Undo renames</button>
       </div>
-      <p id="run-hint" class="run-hint" hidden></p>
-      <div id="progress-panel" hidden>
-        <p id="run-folder" class="run-hint" aria-label="Saved scan folder"></p>
-        <p id="run-scope" class="run-hint"></p>
-        <p id="run-inventory" class="run-hint"></p>
-        <div class="summary"><span id="count">0 items</span><span id="percent">0%</span></div>
-        <progress id="progress" value="0" max="1"></progress>
+      <p id="selected-scan-folder" class="run-hint" hidden></p><p id="profile-scope" class="run-hint" hidden></p><p id="run-hint" class="run-hint" hidden></p>
+      <div id="progress-panel">
+        <h3 id="prototype-progress-title">Scan progress</h3>
+        <p id="run-folder" class="run-hint"></p><p id="run-scope" class="run-hint"></p><p id="run-inventory" class="run-hint"></p>
+        <div id="prototype-progress-summary" class="summary" hidden><span id="count">0 items</span><span id="percent">0%</span></div>
+        <progress id="progress" value="0" max="1" hidden></progress>
         <div id="current"></div>
         <p id="run-time" class="run-hint" hidden></p>
         <div class="counts">
-          <div><strong id="renamed">0</strong><span>Renamed or moved</span></div>
+          <div><strong id="renamed">0</strong><span>Renamed</span></div>
+          <div><strong id="moved">0</strong><span>Moved</span></div>
           <div><strong id="kept">0</strong><span>Kept</span></div>
           <div><strong id="flagged">0</strong><span>Flagged</span></div>
           <div><strong id="skipped">0</strong><span>Skipped</span></div>
           <div><strong id="metadata-done">0</strong><span>Metadata repaired</span></div>
         </div>
       </div>
-    </section>
+      </section>
+      </div>
+    </div>
     </div>
     <section id="review-view" hidden>
-      <div class="actions"><button type="button" class="secondary" id="review-bug-report">Copy bug report</button></div>
       <p id="review-inventory" class="run-hint inventory-overview" hidden></p>
-      <div id="operation-review" class="card" hidden>
+      <div id="operation-review" hidden>
+      <aside class="prototype-rail">
+        <div class="prototype-rail-cap" id="prototype-operation-phase">Review</div>
+        <div id="prototype-duplicate-nav" class="prototype-page-rail" hidden>
+          <button type="button" data-duplicate-view="exact" aria-pressed="true">Exact duplicates</button>
+          <button type="button" data-duplicate-view="possible" aria-pressed="false">Possible duplicates</button>
+        </div>
+        <div id="prototype-move-rail" hidden><nav class="review-list" aria-label="Proposed folder tree"><ul id="move-tree" class="folder-tree"></ul></nav></div>
+      </aside>
+      <section class="prototype-operation-content">
         <div class="section-title">
           <div><h2 id="operation-title" class="page-title"></h2><p id="operation-root" class="run-hint"></p></div>
-          <div class="actions"><button id="operation-pause" class="secondary" hidden>Pause</button><button id="operation-undo" class="secondary" hidden>Undo moves</button><button id="operation-resume-apply" class="primary" hidden>Resume applying</button></div>
+          <div class="actions"><button id="operation-pause" class="secondary" hidden>Pause</button><button id="operation-undo" class="secondary" hidden>Undo moves</button><button id="operation-resume-apply" class="primary" hidden>Resume applying</button><button id="operation-bug-report" type="button" class="secondary">Copy bug report</button></div>
         </div>
         <p id="operation-status" role="status"></p>
-        <div id="move-results" class="review-split" hidden>
-          <nav class="review-list" aria-label="Proposed folder tree"><ul id="move-tree" class="folder-tree"></ul></nav>
+        <div id="move-results" hidden>
           <section class="review-detail" aria-labelledby="move-destination">
-            <h3 id="move-destination"></h3><div id="move-location-tree"></div><div id="move-location-actions" class="actions" hidden><button id="move-keep-location" class="secondary" type="button">Keep in current folder</button><button id="move-change-location" class="secondary" type="button">Choose another folder</button></div>
+            <h3 id="move-destination"></h3>
             <p id="move-folder-note" class="run-hint"></p>
             <ul id="move-files" class="move-files"></ul>
+            <section id="move-location-actions" hidden aria-label="Selected file location">
+              <h3>Proposed location</h3>
+              <div id="move-location-tree"></div>
+              <dl class="location-paths">
+                <dt>From</dt><dd id="move-from"></dd>
+                <dt>To</dt><dd id="move-to"></dd>
+              </dl>
+              <div class="actions">
+                <button id="move-keep-location" type="button" class="secondary">Keep in current folder</button>
+                <button id="move-change-location" type="button" class="secondary">Choose another folder</button>
+              </div>
+            </section>
             <div class="actions"><button id="apply-moves" class="primary" disabled>Apply selected moves</button></div>
           </section>
         </div>
         <div id="duplicate-results" hidden>
-          <h3>Exact duplicates</h3>
-          <div id="exact-duplicates"></div>
-          <h3>Possible duplicates</h3>
-          <p class="run-hint">These files have similar names and different contents.</p>
-          <div id="possible-duplicates"></div>
+          <section data-duplicate-panel="exact" class="card"><h3>Exact duplicates</h3><div id="exact-duplicates"></div></section>
+          <section data-duplicate-panel="possible" class="card" hidden><h3>Possible duplicates</h3>
+          <p class="run-hint">Compare two candidates before deciding whether they are copies or revisions.</p>
+          <div id="possible-duplicates"></div></section>
         </div>
+      </section>
       </div>
       <div id="filename-review">
-      <section id="preview-panel">
+        <aside class="prototype-rail" aria-label="Scan and review filters">
+          <div class="prototype-rail-cap" id="prototype-review-phase">Scan complete</div>
+        <div id="prototype-rename-filters" class="review-filters" aria-label="Filter assessed files">
+          <button type="button" data-review-filter="all" aria-pressed="true"><span>All files</span><span class="prototype-filter-count" data-count="all"></span></button>
+          <button type="button" data-review-filter="proposed" aria-pressed="false"><span>Proposed</span><span class="prototype-filter-count" data-count="proposed"></span></button>
+          <button type="button" data-review-filter="auto" aria-pressed="false"><span>Auto-renamed</span><span class="prototype-filter-count" data-count="auto"></span></button>
+          <button type="button" data-review-filter="kept" aria-pressed="false"><span>Kept</span><span class="prototype-filter-count" data-count="kept"></span></button>
+          <button type="button" data-review-filter="flagged" aria-pressed="false"><span>Flagged</span><span class="prototype-filter-count" data-count="flagged"></span></button>
+          <button type="button" data-review-filter="unassessed" aria-pressed="false"><span>Not assessed</span><span class="prototype-filter-count" data-count="unassessed"></span></button>
+        </div>
+          <div class="prototype-rail-summary">
+            <h3 class="prototype-rail-heading">Scan progress</h3>
+            <progress id="prototype-rail-review-progress" max="1" value="0" aria-label="Scan progress"></progress>
+            <p id="prototype-review-progress-text"></p>
+            <p id="prototype-review-scope"></p>
+          </div>
+        </aside>
+        <div class="prototype-console-content">
+        <section id="preview-panel">
         <div class="review-header">
-          <div><h2 class="page-title">Review scan</h2><p id="review-context"></p></div>
-          <div class="actions"><button id="review-pause" class="secondary" hidden>Pause</button><button id="review-undo" class="secondary" hidden>Undo changes</button></div>
+          <div><h2 class="page-title">Review files</h2><p id="review-context"></p></div>
+          <div class="actions"><button id="review-pause" class="secondary" hidden>Pause</button><button id="review-bug-report" type="button" class="secondary">Copy bug report</button></div>
         </div>
-        <div class="review-filters" aria-label="Filter assessed files">
-          <button type="button" data-review-filter="proposed" aria-pressed="true">Proposed</button>
-          <button type="button" data-review-filter="kept" aria-pressed="false">Kept</button>
-          <button type="button" data-review-filter="flagged" aria-pressed="false">Flagged</button>
-          <button type="button" data-review-filter="unassessed" aria-pressed="false">Not assessed</button>
-        </div>
-        <p id="preview-summary" class="run-hint" role="status"></p>
         <div id="proposal-scroll" class="review-split">
-          <div class="review-list" aria-label="Files"><div class="review-selection-bar"><button id="apply" class="primary" hidden>Apply selected</button></div><ul id="proposals"></ul></div>
+          <div class="review-list" aria-label="Files">
+            <div class="prototype-panel-title"><h3>Files in scan</h3><p id="preview-summary" role="status"></p></div>
+            <div class="prototype-row-headers"><span id="prototype-current-column-title">Current filename</span><span id="prototype-proposed-column-title">Proposed change</span></div>
+            <ul id="proposals"></ul>
+          </div>
           <div id="review-detail" class="review-detail">
+            <div class="prototype-panel-title"><h3>File preview</h3></div>
             <p id="review-empty">Select a file to see its proposed changes.</p>
             <div id="review-selected" hidden>
               <div class="review-filters" aria-label="Selected file view">
@@ -138,19 +188,24 @@
                 <button id="location-tab" type="button" aria-pressed="false">Location</button>
               </div>
               <div id="file-details">
-                <div id="file-visual" aria-live="polite"></div><button id="open-pdf" class="secondary" type="button" hidden>Open PDF</button>
+                <div id="file-visual" aria-live="polite"></div>
+                <button id="open-pdf" class="secondary" type="button" hidden>Open PDF</button>
                 <div id="preview-pages" class="actions" hidden>
                   <button id="file-prev" class="secondary" type="button">Previous page</button><span id="file-page"></span><button id="file-next" class="secondary" type="button">Next page</button>
                 </div>
                 <div class="file-diff">
-                  <div><small>Current filename</small><strong id="current-filename"></strong></div>
-                  <div><small>Proposed filename</small><strong id="proposed-filename" aria-live="polite"></strong></div>
+                  <div><small id="prototype-current-label">Current filename</small><strong id="current-filename"></strong></div>
+                  <div><small id="prototype-proposed-label">Proposed filename</small><strong id="proposed-filename" aria-live="polite"></strong></div>
                 </div>
-                <section id="flagged-names" aria-label="Recommended names" hidden>
-                  <div class="actions"><button id="recommend-names" class="secondary" type="button">Recommend names</button></div>
+                <p id="prototype-auto-evidence" class="run-hint" hidden></p>
+                <div class="prototype-location-summary">
+                  <div><span id="prototype-location-label">Current folder</span><strong id="prototype-location-path"></strong></div>
+                  <button type="button" id="prototype-view-location" class="secondary">View location</button>
+                </div>
+                <section id="flagged-names" aria-label="Naming options" hidden>
+                  <div class="actions"><button id="recommend-names" class="secondary" type="button">Recommended names</button></div>
                   <p class="run-hint" id="recommended-names-status" role="status"></p>
-                  <div id="recommended-names-list" class="recommended-names" role="group" aria-label="Name choices"></div>
-                  <div class="actions" id="save-recommended-name" hidden><button id="use-recommended-name" type="button" class="primary">Apply chosen name</button></div>
+                  <div id="recommended-names-list" class="recommended-names" role="group" aria-label="Name choices"></div><div class="actions" id="save-recommended-name" hidden><button id="use-recommended-name" type="button" class="primary">Apply chosen name</button></div>
                 </section>
                 <p id="metadata-unchanged">Metadata: No change</p>
                 <div id="metadata-diff" class="file-diff" hidden>
@@ -159,17 +214,29 @@
                 </div>
               </div>
               <div id="file-location" hidden>
-                <h3>Proposed location</h3>
+                <h3>Current and proposed locations</h3>
                 <div id="location-tree"></div>
                 <dl class="location-paths"><dt>From</dt><dd id="location-from"></dd><dt>To</dt><dd id="location-to"></dd></dl>
                 <div class="actions" id="location-controls" hidden><button id="keep-location" class="secondary" type="button">Keep in current folder</button><button id="choose-location" class="secondary" type="button">Choose another folder</button></div>
               </div>
+              <div class="prototype-inline-edit" id="prototype-inline-edit" hidden>
+                <label for="prototype-inline-filename">New filename</label>
+                <input id="prototype-inline-filename" type="text" autocomplete="off">
+                <button id="prototype-cancel-edit" type="button" class="quiet">Cancel</button>
+              </div>
+              <div class="actions"><button id="keep-filename" class="secondary" type="button" hidden>Keep current name</button><button id="edit-filename" class="secondary" type="button">Edit proposed name</button><button id="apply-current" class="primary" type="button">Apply this change</button><button id="delete-flagged-file" class="secondary delete-file" type="button" hidden>Delete file</button></div>
               <h3>Reason</h3>
               <p id="review-reason"></p><p id="review-note" class="run-hint"></p>
-              <div class="actions"><button id="keep-filename" class="secondary" type="button" hidden>Keep current name</button><button id="edit-filename" class="secondary" type="button">Edit proposed name</button><button id="apply-current" class="secondary" type="button">Apply this change</button><button id="delete-flagged-file" class="secondary delete-file" type="button" hidden>Move to Recycle Bin</button></div>
             </div>
           </div>
         </div>
+        <footer id="prototype-review-footer">
+          <strong id="prototype-selection" aria-live="polite">0 selected</strong>
+          <div class="actions">
+            <button id="review-undo" class="secondary" hidden>Undo changes</button>
+            <button id="apply" class="primary" hidden>Apply selected</button>
+          </div>
+        </footer>
         <div class="actions" id="page-controls" hidden><button id="previous-page" class="secondary">Previous</button><span id="preview-range"></span><button id="next-page" class="secondary">Next</button></div>
       </section>
     <section class="card flags">
@@ -198,11 +265,29 @@
       </div>
       <div class="actions" id="inspection-pages" hidden><button id="inspection-prev" class="secondary">Previous</button><button id="inspection-next" class="secondary">Next</button></div>
     </details>
+        </div>
       </div>
     </section>
     <section id="history-view" hidden aria-label="History">
-    <h2 class="page-title">History</h2>
-    <div class="card"><label for="history">Run history</label><select id="history"><option value="">No runs yet</option></select><div class="actions"><button id="history-review" type="button" class="secondary">Review selected run</button><button id="data" class="quiet">Open app data</button><button id="history-bug-report" class="secondary" type="button">Copy bug report</button></div></div>
+    <header class="prototype-page-header"><h2 class="page-title">History</h2></header>
+    <div class="prototype-page-grid">
+      <section class="card prototype-page-rail" aria-label="Scan history">
+        <div class="prototype-rail-cap">Runs</div>
+        <select id="history" aria-label="Run history" hidden><option value="">No runs yet</option></select>
+        <div id="prototype-run-list"></div>
+      </section>
+      <section class="card" aria-labelledby="prototype-run-title">
+        <h3 id="prototype-run-title">Selected run</h3>
+        <p id="prototype-run-context" class="run-hint"></p>
+        <dl class="prototype-run-metrics">
+          <div><dt>Files assessed</dt><dd id="prototype-history-assessed">0</dd></div>
+          <div><dt>Auto-renamed</dt><dd id="prototype-history-auto">0</dd></div>
+          <div><dt>Manual changes</dt><dd id="prototype-history-manual">0</dd></div>
+          <div><dt>Flags open</dt><dd id="prototype-history-flagged">0</dd></div>
+        </dl>
+        <div class="actions"><button id="history-review" type="button" class="primary">Open in Review</button><button id="history-bug-report" type="button" class="secondary">Copy bug report</button><button id="data" class="quiet">Open app data</button></div>
+      </section>
+    </div>
     <details id="comparison-panel" class="card flags" hidden>
       <summary>Compare scans</summary>
       <p>Turn on comparison hashes in two scans of separate, unchanged copies.</p>
@@ -215,7 +300,31 @@
     </details>
     </section>
     <section id="settings-view" hidden aria-label="Settings">
-      <details class="card" id="next-scan-settings"><summary>Settings for the next scan</summary>
+    <header class="prototype-page-header"><h2 class="page-title">Settings</h2></header>
+    <section id="model-panel" class="model" hidden>
+      <div><h2>Set up local AI</h2><p><span id="model-name">Download Qwen3.5-4B once (3.4 GB).</span> It reads images and helps name files on your PC.</p>
+      </div>
+      <button id="model" class="secondary">Download model</button>
+      <progress id="download-progress" hidden value="0" max="1"></progress>
+      <p id="download-status" hidden></p>
+    </section>
+    <div class="prototype-page-grid">
+      <nav class="card prototype-page-rail" aria-label="Settings categories">
+        <div class="prototype-rail-cap">Categories</div>
+        <button type="button" data-preference="scope" aria-pressed="true">Scan defaults</button>
+        <button type="button" data-preference="naming" aria-pressed="false">Naming rules</button>
+        <button type="button" data-preference="execution" aria-pressed="false">Automatic changes</button>
+        <button type="button" data-preference="ai" aria-pressed="false">Local AI</button>
+        <button type="button" data-preference="connector" aria-pressed="false">Connector</button>
+      </nav>
+    <section id="profile-panel" class="card">
+      <h2>Scan settings and profiles</h2>
+      <p id="profile-effective" class="run-hint"></p>
+      <div class="actions">
+        <label for="profiles">Saved profile</label><select id="profiles"></select>
+        <button id="restore-profile" class="secondary" type="button">Activate profile</button>
+      </div>
+            <details id="next-scan-settings"><summary>Next scan only</summary>
       <details class="file-types">
         <summary>File types <span id="file-type-summary">· All file types</span></summary>
         <label for="scope-mode">File selection</label>
@@ -253,25 +362,28 @@
 
       </details>
 
-    <h2 class="page-title">Settings</h2>
-    <section id="profile-panel" class="card">
-      <h2>Scan settings and profiles</h2>
-      <p id="profile-effective" class="run-hint"></p>
-      <div class="actions">
-        <label for="profiles">Saved profile</label><select id="profiles"></select>
-        <button id="restore-profile" class="secondary" type="button">Activate profile</button>
-      </div>
+
+
+      <section id="prototype-rule-examples" hidden aria-label="Naming examples">
+        <h3>Example results</h3>
+        <dl class="prototype-naming-examples">
+          <div><dt>Journal article</dt><dd>Nguyen - 2023 - Feedback and Reflective Practice - Journal of Clinical Learning.pdf</dd></div>
+          <div><dt>Course paper</dt><dd>Counselling Skills Reflection - MCC 642 - Draft.docx</dd></div>
+          <div><dt>Other file</dt><dd>Yellow Butterfly.png</dd></div>
+        </dl>
+      </section>
       <div id="profile-fields"></div>
-      <div class="actions">
+    <section id="prototype-connector-fields" hidden>
+      <h3>ChatGPT connection</h3>
+      <label class="fallback"><input id="bridge" type="checkbox"> Allow ChatGPT to inspect and control this scan</label>
+      <p>In the ChatGPT desktop app, add an STDIO server under Settings → MCP servers. Use the Local File Renamer executable as the command and <code>--mcp</code> as its argument. Keep this app open to check scans.</p>
+    </section>
+      <div class="actions" id="prototype-save-profile">
         <label for="profile-name">Save as</label><input id="profile-name" maxlength="40" autocomplete="off">
         <button id="save-profile" type="button" class="primary">Save and activate</button>
       </div>
     </section>
-    <details class="card">
-      <summary>ChatGPT connection</summary>
-      <label class="fallback"><input id="bridge" type="checkbox"> Allow ChatGPT to inspect and control this scan</label>
-      <p>In the ChatGPT desktop app, add an STDIO server under Settings → MCP servers. Use the Local File Renamer executable as the command and <code>--mcp</code> as its argument. Keep this app open to check scans.</p>
-    </details>
+    </div>
     </section>
     </div>
     <dialog id="correct-dialog">

@@ -35,7 +35,7 @@ func removedDetails(old, proposed string) []string {
 }
 
 func preservePublicationName(name string, d decision) decision {
-	if !usefulFilename(name) || d.Name == name {
+	if !usefulFilename(name) || d.Name == name || d.ReplaceDownloadID {
 		return d
 	}
 	if d.Unknown || len(removedDetails(name, d.Name)) > 0 {

@@ -21,6 +21,9 @@ func identity(_ string, info os.FileInfo) (string, error) {
 func renameNoReplace(from, to string) error {
 	return unix.Renameat2(unix.AT_FDCWD, from, unix.AT_FDCWD, to, unix.RENAME_NOREPLACE)
 }
+
+const recycleAvailable = false
+
 func recycleFile(_ string) error { return fmt.Errorf("The Windows Recycle Bin is unavailable") }
 func configureChild(c *exec.Cmd) {}
 

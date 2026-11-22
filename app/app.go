@@ -27,16 +27,18 @@ type proposalRow struct {
 	Metadata               *metadataEdit
 }
 type inspectionRow struct {
-	Path, Proposed, Note      string
-	Index                     int
-	Revision                  uint64 `json:",omitempty"`
-	Kind, Reason, Decision    string
-	Inspection                inspection
-	Unknown                   bool
-	ReviewActions, Refinement bool          `json:",omitempty"`
-	Metadata                  *metadataEdit `json:",omitempty"`
-	RenameMS                  int64
-	Outcome                   string
+	Path, Proposed, Note                        string
+	AutomaticFrom, AutomaticTo, AutomaticReason string
+	AutomaticUndone                             bool
+	Index                                       int
+	Revision                                    uint64 `json:",omitempty"`
+	Kind, Reason, Decision                      string
+	Inspection                                  inspection
+	Unknown                                     bool
+	ReviewActions, Refinement                   bool          `json:",omitempty"`
+	Metadata                                    *metadataEdit `json:",omitempty"`
+	RenameMS                                    int64
+	Outcome                                     string
 }
 type inspectionPage struct {
 	Job   string
@@ -45,11 +47,11 @@ type inspectionPage struct {
 }
 
 type view struct {
-	Inventory                                                 *inventoryCounts
-	ScopeDescription                                          string
-	FileTotal, FilesAssessed, FilesSkipped, FilesVerified     int
-	StartID, StartJob, StartError, StartingRoot               string
-	StartingScope, StartingMode, ExecutionMode, OutcomeReason string
+	Inventory                                                               *inventoryCounts
+	ScopeDescription                                                        string
+	FileTotal, FilesAssessed, FilesSkipped, FilesVerified, FilesNotAssessed int
+	StartID, StartJob, StartError, StartingRoot                             string
+	StartingScope, StartingMode, ExecutionMode, OutcomeReason               string
 
 	Operation                                                         scanOperation
 	ModelName                                                         string
@@ -60,6 +62,7 @@ type view struct {
 	ModelReady, Busy, Pausing, Pending, Closing, Partial, PreviewOnly bool
 	Downloaded, DownloadSize                                          int64
 	MetadataDone, ReviewStart, ReviewEnd, Drafts, ApprovedWaiting     int
+	AutoRenamed, ManualChanges, Moved                                 int
 	Revision                                                          uint64
 	Flags                                                             []flagRow
 	Jobs                                                              []job
@@ -174,14 +177,24 @@ func (a *application) syncSession(full bool) {
 	a.v.Total = len(s.manifest.Items)
 	a.v.FileTotal = s.fileCount
 	a.v.FilesAssessed, a.v.FilesSkipped, a.v.FilesVerified = s.filesAssessed, s.filesSkipped, s.filesVerified
+	a.v.FilesNotAssessed = s.filesNotAssessed
 	a.v.Inventory = s.manifest.Inventory
 	a.v.Done = s.index
 	if s.manifest.Preview {
 		a.v.Done = len(s.plans)
 	}
-	a.v.Renamed = s.renamed
-	a.v.Kept = s.kept
-	a.v.Skipped = s.skipped
+	a.v.Renamed = s.renamed - s.moved
+	a.v.Moved = s.moved
+	a.v.AutoRenamed = len(s.automaticMoves)
+	a.v.ManualChanges = s.renamed - a.v.AutoRenamed
+	a.v.Kept = s.filesKept
+	if s.applyThrough > 0 || !s.manifest.Preview {
+		a.v.Kept = s.kept
+	}
+	a.v.Skipped = s.filesSkipped
+	if s.applyThrough > 0 || !s.manifest.Preview {
+		a.v.Skipped = s.skipped
+	}
 	a.v.Flagged = len(s.flags) + len(s.planFlags) - s.resolvedPlanFlags
 	a.v.MetadataDone = len(s.repaired) - s.metadataUndone
 	a.v.UndoLeft = len(s.moves) - s.undoCount + a.v.MetadataDone
@@ -378,7 +391,6 @@ func (a *application) launchScan(root string, partial bool, profile string, oper
 			opts.Execution.Mode = "review"
 		}
 		if operation == scanDuplicates {
-			opts.Execution.Mode = "preview_only"
 			opts.Scope.VerifyComparison = false
 		}
 	}
@@ -929,6 +941,10 @@ func (a *application) inspectionPageFiltered(offset int, unknown bool, filter st
 			if decision != "Name verified" && decision != "Kept existing name" && !strings.HasPrefix(decision, "Name kept") {
 				continue
 			}
+		case "auto":
+			if _, ok := a.s.automaticMoves[r.Index]; !ok {
+				continue
+			}
 		case "flagged":
 			if !flaggedPlan(r) && !a.s.canRefine(r.Index) && !strings.Contains(a.s.outcomes[r.Index].Note, "Rename failed:") {
 				continue
@@ -940,13 +956,18 @@ func (a *application) inspectionPageFiltered(offset int, unknown bool, filter st
 		}
 		if page.Total >= offset && len(page.Rows) < 100 {
 			row := inspectionRow{Path: a.s.currentPath(r.Path, r.Index), Note: r.Note, Unknown: r.Unknown, Inspection: r.Inspection, Index: r.Index, Revision: a.s.planVersions[r.Index], Kind: r.Kind, Reason: r.Reason, Decision: planOutcome(r)}
-			if filter == "flagged" {
+			if filter == "flagged" || filter == "auto" || filter == "all" {
 				_, _, err := a.flaggedFile(a.v.Job, a.v.Revision, r.Index)
 				row.ReviewActions = err == nil
 				row.Refinement = a.s.canRefine(r.Index)
 				if a.s.reviewable(r) {
 					row.Metadata = r.Metadata
 				}
+			}
+			if automatic, ok := a.s.automaticMoves[r.Index]; ok {
+				row.AutomaticFrom, row.AutomaticTo = automatic.move.From, automatic.move.To
+				row.AutomaticReason = automatic.reason
+				row.AutomaticUndone = automatic.position >= len(a.s.moves)-a.s.undoCount
 			}
 			row.Outcome = planOutcome(r)
 			if result, ok := a.s.outcomes[r.Index]; ok {
@@ -960,6 +981,17 @@ func (a *application) inspectionPageFiltered(offset int, unknown bool, filter st
 		}
 		page.Total++
 	}
+	if filter == "all" || filter == "unassessed" {
+		for index := len(a.s.plans); index < a.s.fileCount; index++ {
+			if page.Total >= offset && len(page.Rows) < 100 {
+				item := a.s.manifest.Items[index]
+				page.Rows = append(page.Rows, inspectionRow{Path: item.Path, Index: index,
+					Decision: "Not assessed", Outcome: "Not assessed", Reason: "Waiting for assessment"})
+			}
+			page.Total++
+		}
+	}
+
 	return page, nil
 }
 

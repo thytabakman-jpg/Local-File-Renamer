@@ -66,7 +66,7 @@ type record struct {
 	Kind, Decision, Reason, OverrideKind         string               `json:",omitempty"`
 	Move                                         *move                `json:",omitempty"`
 	Inspection                                   inspection           `json:",omitempty"`
-	Digest                                       string               `json:",omitempty"`
+	Digest, TextDigest                           string               `json:",omitempty"`
 	Stamp                                        stamp                `json:",omitempty"`
 	Unknown, Auto, Partial, AutoValidated, Rough bool                 `json:",omitempty"`
 	Metadata                                     *metadataEdit        `json:",omitempty"`
@@ -77,48 +77,49 @@ type record struct {
 type indexedMove struct {
 	move     move
 	position int
+	reason   string
 }
 type session struct {
-	filesAssessed, filesSkipped, filesVerified int
-	dir, cacheDir                              string
-	online                                     *onlineLookup
-	planRevision                               uint64
-	planVersions                               []uint64
-	selection                                  []int
-	operationError                             string
-	undoFailures                               int
-	clock                                      scanClock
-	clockLast                                  time.Time
-	outcomes                                   map[int]record
-	manifest                                   manifest
-	log                                        *os.File
-	index, renamed, kept, skipped              int
-	flags                                      []record
-	moves                                      []move
-	pending                                    *record
-	undoCount                                  int
-	byItem                                     map[int]indexedMove
-	folderByPath                               map[string]indexedMove
-	versionGroups                              map[string][]int
-	imageVersions                              map[int]string
-	uncertainImageVersions                     map[int]bool
-	plans                                      []record
-	planFlags                                  []record
-	proposedNames                              map[string]string
-	proposedTargets                            map[string]bool
-	partial                                    bool
-	applyThrough, fileCount                    int
-	resolvedPlanFlags                          int
-	sortIndex                                  *folderIndex
-	relocationParents                          map[string]bool
-	autoCompleted                              map[int]bool
-	autoHeld                                   map[int]bool
-	plansByParent                              map[string][]record
-	moveIndexByTarget                          map[string]int
-	excluded                                   map[int]bool
-	metadataIndex, metadataUndone              int
-	metadataPlans, repaired                    []record
-	restoredStamps                             map[int]stamp
+	filesAssessed, filesSkipped, filesVerified, filesNotAssessed, filesKept int
+	dir, cacheDir                                                           string
+	online                                                                  *onlineLookup
+	planRevision                                                            uint64
+	planVersions                                                            []uint64
+	selection                                                               []int
+	operationError                                                          string
+	undoFailures                                                            int
+	clock                                                                   scanClock
+	clockLast                                                               time.Time
+	outcomes                                                                map[int]record
+	manifest                                                                manifest
+	log                                                                     *os.File
+	index, renamed, kept, skipped, recycled, moved                          int
+	flags                                                                   []record
+	moves                                                                   []move
+	pending                                                                 *record
+	undoCount                                                               int
+	byItem, automaticMoves                                                  map[int]indexedMove
+	folderByPath                                                            map[string]indexedMove
+	versionGroups                                                           map[string][]int
+	imageVersions                                                           map[int]string
+	uncertainImageVersions                                                  map[int]bool
+	plans                                                                   []record
+	planFlags                                                               []record
+	proposedNames                                                           map[string]string
+	proposedTargets                                                         map[string]bool
+	partial                                                                 bool
+	applyThrough, fileCount                                                 int
+	resolvedPlanFlags                                                       int
+	sortIndex                                                               *folderIndex
+	relocationParents                                                       map[string]bool
+	autoCompleted                                                           map[int]bool
+	autoHeld                                                                map[int]bool
+	plansByParent                                                           map[string][]record
+	moveIndexByTarget                                                       map[string]int
+	excluded                                                                map[int]bool
+	metadataIndex, metadataUndone                                           int
+	metadataPlans, repaired                                                 []record
+	restoredStamps                                                          map[int]stamp
 }
 
 func inventory(ctx context.Context, root string) ([]entry, error) {
@@ -298,7 +299,7 @@ func readSession(dir string, readOnly bool) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &session{dir: dir, outcomes: make(map[int]record), byItem: make(map[int]indexedMove), folderByPath: make(map[string]indexedMove), proposedNames: make(map[string]string), proposedTargets: make(map[string]bool), autoCompleted: make(map[int]bool), autoHeld: make(map[int]bool),
+	s := &session{dir: dir, outcomes: make(map[int]record), byItem: make(map[int]indexedMove), automaticMoves: make(map[int]indexedMove), folderByPath: make(map[string]indexedMove), proposedNames: make(map[string]string), proposedTargets: make(map[string]bool), autoCompleted: make(map[int]bool), autoHeld: make(map[int]bool),
 		excluded: make(map[int]bool), plansByParent: make(map[string][]record), moveIndexByTarget: make(map[string]int), restoredStamps: make(map[int]stamp), relocationParents: make(map[string]bool)}
 	if err = json.Unmarshal(b, &s.manifest); err != nil {
 		return nil, err
@@ -445,9 +446,15 @@ func (s *session) countFileAssessment(r record, increment int) {
 	switch planOutcome(r) {
 	case "Skipped":
 		s.filesSkipped += increment
-	case "Not assessed", "Analysis failed":
+	case "Not assessed":
+		s.filesNotAssessed += increment
+	case "Analysis failed":
 	case "Name verified":
 		s.filesVerified += increment
+		s.filesKept += increment
+		s.filesAssessed += increment
+	case "Kept existing name", "Name kept by operator", "Name kept by preference":
+		s.filesKept += increment
 		s.filesAssessed += increment
 	default:
 		s.filesAssessed += increment
@@ -517,9 +524,11 @@ func (s *session) accept(r record) {
 		s.planRevision++
 		s.planVersions[r.Index] = s.planRevision
 		if r.Status == "absent" {
+			s.recycled++
 			plan := s.plans[r.Index]
 			s.countFileAssessment(plan, -1)
 			plan.Move, plan.Metadata = nil, nil
+			plan.Digest, plan.TextDigest = "", ""
 			plan.Note, plan.Decision, plan.Reason = "", removedFlaggedFile, "The file is no longer in the scanned folder after a Recycle Bin request"
 			plan.Auto, plan.AutoValidated, plan.Unknown = false, false, false
 			s.countFileAssessment(plan, 1)
@@ -539,6 +548,13 @@ func (s *session) accept(r record) {
 			s.pending = nil
 		}
 	case "result":
+		if r.Move != nil && s.automaticMoves != nil && r.Auto && s.pending != nil && s.pending.Type == "intent" {
+			reason := "Matched the automatic naming rules"
+			if r.Index < len(s.plans) && s.plans[r.Index].Reason != "" {
+				reason = s.plans[r.Index].Reason
+			}
+			s.automaticMoves[r.Index] = indexedMove{move: *r.Move, position: len(s.moves), reason: reason}
+		}
 		s.planRevision++
 		if r.Index < len(s.planVersions) {
 			s.planVersions[r.Index] = s.planRevision
@@ -553,8 +569,11 @@ func (s *session) accept(r record) {
 			s.resolvedPlanFlags++
 		}
 		switch r.Status {
-		case "renamed", "moved":
+		case "renamed":
 			s.renamed++
+		case "moved":
+			s.renamed++
+			s.moved++
 		case "kept":
 			s.kept++
 		case "skipped":

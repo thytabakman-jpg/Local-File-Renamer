@@ -131,7 +131,11 @@ func (a *application) serveFilePreview(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case photoExtension(path):
 		var note string
-		jpeg, note = imageEvidenceWith(path, 1100, 128)
+		edge := 1100
+		if query.Get("thumbnail") == "1" {
+			edge = 96
+		}
+		jpeg, note = imageEvidenceWith(path, edge, 128)
 		if len(jpeg) == 0 {
 			err = errors.New(note)
 		}

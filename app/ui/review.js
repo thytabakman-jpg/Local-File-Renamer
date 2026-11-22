@@ -1,7 +1,8 @@
 "use strict";
 
 let currentView = "scan";
-let reviewFilter = "proposed";
+let reviewFilter = "all";
+let inlineEdit;
 let reviewRows = [];
 let reviewTotal = 0;
 let reviewIndex = -1;
@@ -17,9 +18,8 @@ let chosenRecommendation = "";
 let recommendationOutcome = "";
 
 function selectView(view) {
-
   currentView = view;
-  if (view !== "review") resetRecommendations("");
+  if (view !== "review") {resetRecommendations(""); closeInlineName();}
   for (const name of ["scan", "review", "history", "settings", "chat"]) show(name + "-view", name === view);
   for (const button of document.querySelectorAll("[data-view]")) button.setAttribute("aria-pressed", String(button.dataset.view === view));
   if (view === "chat") {
@@ -62,7 +62,7 @@ function updateReview(state) {
   }
   const phase = phases[state.Phase] || state.Phase;
   el("review-context").textContent = state.Job ?
-    [leaf(state.Root), phase, state.Partial ? "Local AI off" : "Local AI on", state.PreviewOnly ? "Preview only" : "Review before applying"].join(" · ") : "Start a scan to review files.";
+    [leaf(state.Root), phase, state.Partial ? "Local AI off" : "Local AI on", state.PreviewOnly ? "Preview only" : state.ExecutionMode === "automatic" ? "Automatic" : "Review before applying"].join(" · ") : "Start a scan to review files.";
   const revisionKey = [state.Job, state.Revision, state.Phase, state.Done, state.Proposed, state.Drafts, reviewFilter, pageOffset].join(":");
   if (revisionKey !== reviewCacheKey) {
     reviewCacheKey = revisionKey;
@@ -89,6 +89,7 @@ async function fetchReviewRows(state, active) {
     const page = await response.json();
     if (!proposed && page.Job !== state.Job || serial !== reviewRequest || currentView !== "review" || state.Job !== latest.Job || state.Revision !== latest.Revision) return;
     reviewRows = proposed ? (page || []) : page.Rows.map(row => ({
+      AutomaticFrom:row.AutomaticFrom, AutomaticTo:row.AutomaticTo, AutomaticReason:row.AutomaticReason, AutomaticUndone:row.AutomaticUndone,
       Index:row.Index, Revision:row.Revision, From:row.Path, To:row.Proposed, Decision:row.Decision, Reason:row.Reason, Note:row.Note, Inspection:row.Inspection,
       ReviewActions:row.ReviewActions, Refinement:row.Refinement, Metadata:row.Metadata, Retry:row.Outcome === "Rename failed"
     }));
@@ -125,26 +126,49 @@ function drawReview() {
         renderReviewControls(latest);
       };
       li.append(check);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "prototype-check-space";
+      li.append(spacer);
     }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "file-list-button";
     button.setAttribute("aria-pressed", String(row.Index === reviewIndex));
-    const type = document.createElement("span");
     const extension = leaf(row.From).split(".").at(-1).toUpperCase();
-    type.className = "file-type-icon";
-    type.textContent = extension.length <= 5 ? extension : "FILE";
-    const name = document.createElement("span");
-    name.textContent = leaf(row.From);
-    button.title = row.From;
+    const previewable = ["JPG","JPEG","JFIF","JPE","PNG","GIF","BMP","TIFF","TIF","WEBP"].includes(extension);
+    const badge = document.createElement("span");
+    badge.className = "file-type-icon";
+    badge.textContent = extension.length <= 5 ? extension : "FILE";
+    let visual = badge;
+    if (previewable) {
+      const img = document.createElement("img");
+      img.className = "prototype-image-thumb";
+      img.alt = "";
+      img.loading = "lazy";
+      img.onerror = () => img.replaceWith(badge);
+      img.src = "/api/file-preview?" + new URLSearchParams({job:latest.Job,index:row.Index,thumbnail:"1"});
+      visual = img;
+    }
     const names = document.createElement("span");
-    names.className = "file-list-names";
-    names.append(name);
-    const proposal = document.createElement("small");
-    proposal.textContent = row.To && leaf(row.From) !== leaf(row.To) ? leaf(row.To) : row.Decision || "";
-    if (row.Draft) proposal.textContent += " · Draft";
-    names.append(proposal);
-    button.append(type,names);
+    names.className = "prototype-filename";
+    const current = document.createElement("span");
+    current.className = "prototype-current-name";
+    const name = document.createElement("span");
+    name.textContent = leaf(reviewFilter === "auto" ? row.AutomaticFrom : row.From);
+    const category = document.createElement("small");
+    category.className = "prototype-row-state";
+    category.textContent = row.Draft ? "Draft" : row.AutomaticFrom
+      ? (row.AutomaticUndone ? "Automatic change undone" : row.Refinement ? "Auto-renamed · Needs review" : "Auto-renamed")
+      : row.Retry ? "Rename failed" : row.Decision || "Proposed";
+    current.append(name, category);
+    const proposal = document.createElement("span");
+    proposal.className = "prototype-proposed-name";
+    proposal.textContent = reviewFilter === "auto" ? leaf(row.AutomaticTo) :
+      row.To ? leaf(row.To) : row.ReviewActions ? "Review filename" : "";
+    names.append(current, proposal);
+    button.title = row.From;
+    button.append(visual,names);
     button.onclick = () => {
       reviewIndex = row.Index;
       drawReview();
@@ -168,7 +192,7 @@ function drawReview() {
 
 function rowSelectable(row, state) {
   return canReview(state) && !state.PreviewOnly && !row.Draft && Boolean(row.To || row.Metadata) &&
-    (reviewFilter === "proposed" || reviewFilter === "flagged");
+    reviewFilter !== "auto";
 }
 
 function reviewRowKey(state, row) {
@@ -179,7 +203,7 @@ function renderReviewControls(state) {
   const pending = state.Phase === "apply-paused";
   const row = reviewRows.find(row => row.Index === reviewIndex);
   const ready = row && rowSelectable(row, state);
-  const flagged = row && row.ReviewActions && !state.PreviewOnly && !state.Pending && reviewFilter === "flagged";
+  const flagged = row && row.ReviewActions && !state.PreviewOnly && !state.Pending && ["all","flagged","auto"].includes(reviewFilter);
   const editable = ready || flagged;
   show("flagged-names", Boolean(flagged));
   show("delete-flagged-file", Boolean(flagged && !state.Busy && !row.Refinement));
@@ -191,8 +215,12 @@ function renderReviewControls(state) {
   el("review-pause").disabled = state.Pausing;
   show("review-undo", !state.Busy && (state.UndoLeft > 0 || state.Pending));
   show("edit-filename", Boolean(editable));
-  show("apply-current", Boolean(ready));
-  el("apply-current").textContent = row?.Retry || row?.Note?.includes("Rename failed:") ? "Retry change" : "Apply this change";
+  if (inlineEdit && (!row || inlineEdit.key !== reviewRowKey(state,row))) closeInlineName();
+  show("apply-current", Boolean(ready || inlineEdit));
+  el("prototype-selection").textContent = selectedItems.size + " selected";
+  el("prototype-current-column-title").textContent = reviewFilter === "auto" ? "Original filename" : "Current filename";
+  el("prototype-proposed-column-title").textContent = reviewFilter === "auto" ? "Automatically changed to" : "Proposed change";
+  el("apply-current").textContent = inlineEdit ? "Apply name" : row?.Retry || row?.Note?.includes("Rename failed:") ? "Retry change" : "Apply this change";
   el("edit-filename").textContent = flagged && !ready ? "Enter a name" : "Edit proposed name";
   show("keep-filename", Boolean(flagged && !row.Refinement));
   show("location-controls", Boolean(editable && row.To && parentFolder(row.From) !== parentFolder(row.To)));
@@ -205,12 +233,18 @@ function renderReviewControls(state) {
 }
 
 function renderFileDetail(row) {
-  el("current-filename").textContent = leaf(row.From);
+  const automatic = reviewFilter === "auto" && Boolean(row.AutomaticFrom);
+  el("prototype-current-label").textContent = automatic ? "Original filename" : "Current filename";
+  el("prototype-proposed-label").textContent = automatic ? "Automatically changed to" : "Proposed filename";
+  el("current-filename").textContent = leaf(automatic ? row.AutomaticFrom : row.From);
   const keyForRecommendations = reviewRowKey(latest,row);
   const chosen = reviewFilter === "flagged" && recommendationKey === keyForRecommendations && chosenRecommendation;
-  el("proposed-filename").textContent = chosen || (row.To && leaf(row.To) !== leaf(row.From) ? leaf(row.To) : "Unchanged");
+  el("proposed-filename").textContent = chosen || (automatic && leaf(row.AutomaticTo)) || (row.To && leaf(row.To) !== leaf(row.From) ? leaf(row.To) : "Unchanged");
   el("review-reason").textContent = [row.Decision, row.Reason].filter(Boolean).join(" · ");
   el("review-note").textContent = row.Note || "";
+  show("prototype-auto-evidence", Boolean(row.AutomaticFrom));
+  el("prototype-auto-evidence").textContent = row.AutomaticFrom
+    ? [row.AutomaticUndone ? "Automatic change undone" : "Automatically renamed", row.AutomaticReason].filter(Boolean).join(" · ") : "";
   const fields = ["Title", "Author"].filter(key => row.Metadata?.[key]);
   show("metadata-unchanged", fields.length === 0);
   show("metadata-diff", fields.length > 0);
@@ -218,6 +252,8 @@ function renderFileDetail(row) {
     el(id).textContent = fields.map(key => key + ": " + (row.Metadata[prefix+key] || "(blank)")).join("\n");
   }
   const from = parentFolder(row.From), to = row.To ? parentFolder(row.To) : from;
+  el("prototype-location-label").textContent = from === to ? "Current folder" : "Proposed folder";
+  el("prototype-location-path").textContent = to;
   el("location-from").textContent = from;
   el("location-to").textContent = to;
   renderLocationTree(from,to);
@@ -355,6 +391,7 @@ for (const button of document.querySelectorAll("[data-view]")) button.onclick = 
 for (const button of document.querySelectorAll("[data-review-filter]")) {
   button.onclick = () => {
     reviewFilter = button.dataset.reviewFilter;
+    closeInlineName();
     selectedItems.clear();
     pageOffset = 0;
     for (const other of document.querySelectorAll("[data-review-filter]")) other.setAttribute("aria-pressed", String(other === button));
@@ -455,19 +492,46 @@ el("file-details-tab").onclick = () => selectDetailTab(false);
 el("location-tab").onclick = () => selectDetailTab(true);
 el("file-prev").onclick = () => loadFilePreview(activeReviewRow(), Math.max(0,previewPage-1));
 el("file-next").onclick = () => loadFilePreview(activeReviewRow(), previewPage+1);
+function closeInlineName() {
+  inlineEdit = undefined;
+  show("prototype-inline-edit", false);
+}
+
+function openInlineName(row) {
+  inlineEdit = {key:reviewRowKey(latest,row)};
+  el("prototype-inline-filename").value = leaf(row.To || row.From);
+  show("prototype-inline-edit", true);
+  el("prototype-inline-filename").focus();
+  el("prototype-inline-filename").select();
+  renderReviewControls(latest);
+}
+
 el("edit-filename").onclick = () => {
   const row = activeReviewRow();
-  if (row) {
-    openCorrection({Index:row.Index,Path:row.From,Name:leaf(row.To || row.From)},latest.Job,row.Revision,reviewFilter === "flagged");
-  }
+  if (row) openInlineName(row);
+};
+el("prototype-cancel-edit").onclick = () => {
+  closeInlineName();
+  renderReviewControls(latest);
+};
+el("prototype-inline-filename").onkeydown = event => {
+  if (event.key === "Enter") el("apply-current").click();
+  if (event.key === "Escape") el("prototype-cancel-edit").click();
 };
 el("apply-current").onclick = async () => {
   const row = activeReviewRow();
-  if (row && window.confirm("Apply the proposed change for " + leaf(row.From) + "?")) {
-    if (await action("apply-one", {id:latest.Job,index:row.Index,revision:row.Revision})) selectedItems.delete(row.Index);
-    renderReviewControls(latest);
+  if (!row) return;
+  const fields = {id:latest.Job,index:row.Index,revision:row.Revision};
+  const filename = inlineEdit && el("prototype-inline-filename").value.trim();
+  if (inlineEdit && !filename) return notice("Enter a filename to apply.");
+  const result = filename ? await action("use-review-name", {...fields,filename}) : await action("apply-one", fields);
+  if (result) {
+    selectedItems.delete(row.Index);
+    closeInlineName();
   }
+  renderReviewControls(latest);
 };
+el("prototype-view-location").onclick = () => selectDetailTab(true);
 el("keep-location").onclick = () => changeReviewLocation("");
 el("choose-location").onclick = async () => {
   const row = activeReviewRow();
@@ -485,6 +549,7 @@ function changeReviewLocation(root) {
 
 el("scan-settings-link").onclick = () => {
   selectView("settings");
+  displaySettingsCategory("scope");
   el("next-scan-settings").open = true;
   el("next-scan-settings").scrollIntoView({block:"start"});
 };
@@ -536,6 +601,7 @@ function openBugReport() {
   el("bug-report-dialog").showModal();
 }
 el("review-bug-report").onclick = openBugReport;
+el("operation-bug-report").onclick = openBugReport;
 el("history-bug-report").onclick = openBugReport;
 el("bug-expected").oninput = drawBugReport;
 el("bug-paths").onchange = drawBugReport;

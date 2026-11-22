@@ -106,7 +106,7 @@ func server(a *application) *http.Server {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		switch r.URL.Path {
-		case "/app.js", "/chat.js", "/operations.js", "/review.js":
+		case "/app.js", "/chat.js", "/operations.js", "/review.js", "/console.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "/style.css":
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
@@ -298,6 +298,24 @@ func server(a *application) *http.Server {
 		}
 	})
 	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 45 * time.Second, MaxHeaderBytes: 16 << 10}
+	mux.HandleFunc("GET /api/compare-duplicates", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		q := r.URL.Query()
+		first, firstErr := strconv.Atoi(q.Get("first"))
+		second, secondErr := strconv.Atoi(q.Get("second"))
+		if firstErr != nil || secondErr != nil {
+			http.Error(w, "Choose two files", http.StatusBadRequest)
+			return
+		}
+		report, err := a.compareDuplicateFiles(r.Context(), q.Get("job"), first, second)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		reply(w, report)
+	})
 	mux.HandleFunc("GET /api/scan-results", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -330,6 +348,7 @@ func server(a *application) *http.Server {
 			Subfolders                           *bool
 			Fresh                                bool
 			Revision                             *uint64
+			Keep                                 *int
 			RowRevisions                         map[int]uint64
 			Rules                                *namingRules
 			Filename                             *string
@@ -430,6 +449,19 @@ func server(a *application) *http.Server {
 			}
 		case "apply-one":
 			err = a.applyOneRevision(q.ID, q.Index, q.Revision)
+		case "recycle-duplicates":
+			if !recycleAvailable {
+				err = fmt.Errorf("The Windows Recycle Bin is unavailable")
+			} else if q.Revision == nil || q.Keep == nil {
+				err = fmt.Errorf("Choose a file to keep and confirm the exact copies to recycle")
+			} else {
+				count, recycleErr := a.recycleExactDuplicates(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices)
+				if recycleErr == nil {
+					reply(w, map[string]int{"recycled": count})
+					return
+				}
+				err = fmt.Errorf("%d recycled. %w", count, recycleErr)
+			}
 		case "recycle-file":
 			if q.Revision == nil || len(q.Indices) != 1 {
 				err = fmt.Errorf("Confirm one file from the current review")

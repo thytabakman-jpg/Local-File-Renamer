@@ -1,4 +1,4 @@
-# Local File Renamer 3.2
+# Local File Renamer 3.3
 
 Local File Renamer for Windows x64 proposes filename changes and file moves, and checks for duplicates. Setup installs for the current user and adds a Start menu shortcut. The launcher opens the app at `http://127.0.0.1:39173/`.
 
@@ -6,7 +6,7 @@ Local File Renamer for Windows x64 proposes filename changes and file moves, and
 
 Choose a **Scan type** and a folder using the Windows picker or by pasting its path. The default scope is all file types, including extensionless files, with subfolders included. The setup page shows when a saved profile narrows the scope. Choose **All file types** to clear profile file, path and size restrictions for this run, or **Selected file types** to choose extensions. The scanner works within the selected folder and skips links and junctions.
 
-**Start scan** builds a new file list. **Start fresh** also rereads files without using the assessment cache. **Resume saved scan** continues with the saved file list and scope. The inventory reports how many files it found, included and filtered out, plus folder counts. Each scan opens for review by default. If the model is unavailable, new scans and resumes can use built-in analysis.
+**Start new scan** builds a new file list. **Start fresh** also rereads files without using the assessment cache. **Resume saved scan** continues with the saved file list and scope. The inventory reports how many files it found, included and filtered out, plus folder counts. Open **Review** to inspect scan results. If the model is unavailable, new scans and resumes can use built-in analysis.
 
 - **File Renamer** proposes filename changes. Use **Run without local AI** for deterministic inspection or download a local model for image and assisted document analysis. You can also opt into folder renames and supported metadata repairs.
 - **Sorter** compares a file's evidence with folders in the scan and groups proposals by destination. It can suggest new subfolders when several files share a topic. Review the folder tree and select which files to move. Apply creates approved destination folders as needed and retains the original filenames. Undo returns moved files to their source folders.
@@ -14,13 +14,15 @@ Choose a **Scan type** and a folder using the Windows picker or by pasting its p
 
 A run can be paused, resumed, or opened from **Run history**. **Close app** saves completed work and stops the model. Windows Setup installs each version into a new program directory and updates the Start menu shortcut. If an earlier Renamer is still running, close it before opening the new version. Models, profiles, assessment cache, and run history are stored separately from the program files.
 
+Duplicate review lists exact copies by full-file hash and possible matches by name or matching text samples. Use **Compare files** to recheck either pair and open both previews. For exact copies, choose one file to keep and select the extras to send to the Windows Recycle Bin. Preview-only scans keep the recycle controls disabled. Duplicate scans make no changes while searching. Version order uses distinct explicit labels where available, and uncertain groups show modification times for review.
+
 ## Review a scan
 
-Use the sidebar for New scan, Review, History, Settings, and Local chat. In File Renamer review, select a file to see a local image or document preview and the filename and metadata comparison. PDF previews render a page at a time. DOCX and DOCM previews show a simplified, read-only layout of extracted paragraphs and headings. Macros and external document links are never executed. A file preview can be unavailable when a decoder is missing or the file cannot be read.
+Use the top navigation for New scan, Review, History, Settings, and Local chat. In File Renamer review, select a file to see a local image or document preview and the filename and metadata comparison. PDF previews render a page at a time. DOCX and DOCM previews show a simplified, read-only layout of extracted paragraphs and headings. Macros and external document links are never executed. A file preview can be unavailable when a decoder is missing or the file cannot be read.
 
 Selecting a row opens its details. In Proposed and Flagged, check the box beside a ready change to include it in Apply selected, or apply it from the file details. Ready files can be applied during a scan. Unchecked proposals remain available. A failed write stays available for retry. Edits, apply, and undo use the run journal, with source and destination checks to prevent overwrites. Copy bug report in Review or History gives you a preview of the report and lets you include paths when needed.
 
-In **Flagged**, select an assessed, unapplied file and click **Recommended names** to get up to four choices from its file evidence. **Use this name** adds your choice to Proposed for review. **Delete file** asks you to confirm moving the selected file to the Windows Recycle Bin. Restore recycled files through Windows.
+In **Flagged**, select an assessed, unapplied file and click **Recommended names** to get up to four choices from its file evidence. **Apply chosen name** applies your selected recommendation. **Move to Recycle Bin** asks you to confirm moving the selected file. **Automatically changed** shows the original name, new name and naming rule, including changes later undone. Restore recycled files through Windows.
 
 ## Audio and video
 
@@ -79,4 +81,4 @@ The connection can start and pause scans, read proposed changes and reports, man
 
 The MIT-licensed source includes `build-windows.sh`. It requires Go 1.27.4, Python 3, a POSIX shell, and the pinned [llama.cpp b12588](https://github.com/ggml-org/llama.cpp/releases/tag/b12588) CPU archive. Set `LLAMA_CPU_ZIP` to reuse a verified copy of the archive. Setup can offer Microsoft's signed Visual C++ runtime if it is missing.
 
-The application source and embedded browser interface are in `app/`. The Windows setup program is in `installer/`, and third-party licence terms are in `licenses/`. Run `go test ./...` for the Linux tests or `go run ./app` to start the app on a supported platform. Run `./build-windows.sh` to create `build/LocalFileRenamer-Installer-3.2.zip`. The ZIP contains a single Setup executable. To try real inference, set `LOCAL_RENAMER_ENGINE` to the llama.cpp directory and `LOCAL_RENAMER_MODELS` to the model files directory. Go modules, the engine archive, and GGUF weights are obtained separately from their pinned sources.
+The application source and embedded browser interface are in `app/`. The Windows setup program is in `installer/`, and third-party licence terms are in `licenses/`. Run `go test ./...` for the Linux tests or `go run ./app` to start the app on a supported platform. Run `./build-windows.sh` to create `build/LocalFileRenamer-Installer-3.3.zip`. The ZIP contains a single Setup executable. To try real inference, set `LOCAL_RENAMER_ENGINE` to the llama.cpp directory and `LOCAL_RENAMER_MODELS` to the model files directory. Go modules, the engine archive, and GGUF weights are obtained separately from their pinned sources.

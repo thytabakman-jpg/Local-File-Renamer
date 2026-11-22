@@ -31,6 +31,7 @@ type decision struct {
 	Checklist                     []classificationCheck
 	Metadata                      *metadataEdit
 	Unknown, Strict, AutoEvidence bool
+	ReplaceDownloadID             bool
 }
 
 var coursePattern = regexp.MustCompile(`(?i)\b([A-Z]{2,5})[ _-]*([1-9][0-9]{2,3}[A-Z]?)\b`)
@@ -478,6 +479,9 @@ func decideWithRules(name string, e evidence, a assessment, modelUsed bool, rule
 	}
 	if slices.Contains([]string{"article", "book", "academic_book"}, kind) {
 		title := verified(a.Title)
+		if e.ArticleFrontMatter && kind == "article" {
+			title = e.Title
+		}
 		if title == "" {
 			if match := labelledTitle.FindStringSubmatch(chars(e.Text, 1600)); match != nil {
 				title = clean(match[1])
@@ -500,6 +504,9 @@ func decideWithRules(name string, e evidence, a assessment, modelUsed bool, rule
 			title = ""
 		}
 		authors := a.Authors
+		if e.ArticleFrontMatter && kind == "article" {
+			authors = []string{e.Author}
+		}
 		if len(authors) == 0 {
 			raw := e.Author
 			if !meaningful(raw) {
@@ -571,6 +578,7 @@ func decideWithRules(name string, e evidence, a assessment, modelUsed bool, rule
 			issues = append(issues, "Some existing citation fields could not be verified in the file")
 		}
 		d := decision{Name: rules.makeName([]string{author, year, title, venue}, ext), Note: strings.Join(issues, "; "), Unknown: len(issues) > 0, Strict: true, AutoEvidence: complete, Kind: kind, Reason: "Checked citation fields against publication evidence"}
+		d.ReplaceDownloadID = kind == "article" && complete && doiDownloadFilename(name, extractDOI(e.Text))
 		return preservePublicationName(name, d)
 	}
 	return decideGeneral(name, e, a, modelUsed, rules)

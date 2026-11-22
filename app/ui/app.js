@@ -213,6 +213,7 @@ function populateSettings(data, profile) {
     const summary = document.createElement("summary");
     summary.textContent = label;
     section.append(summary);
+    section.dataset.settingGroup = group;
     for (const key of Object.keys(data.defaults[group])) {
       const field = group + "." + key;
       const spec = data.fields[field];
@@ -245,6 +246,7 @@ function populateSettings(data, profile) {
     nodes.push(section);
   }
   el("profile-fields").replaceChildren(...nodes);
+  if (typeof displaySettingsCategory === "function") displaySettingsCategory();
   el("profiles").replaceChildren(...data.profiles.map(name => new Option(name,name)));
   el("profiles").value = profile || data.active;
   el("profile-name").value = profile || data.active;
@@ -342,7 +344,7 @@ async function action(name, fields = {}) {
     const r = await fetch("/api/action", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: name, ...fields }),
-      ...(name === "pick" ? {} : {signal:AbortSignal.timeout(15000)})
+      ...(["pick","recycle-duplicates"].includes(name) ? {} : {signal:AbortSignal.timeout(15000)})
     });
     if (!r.ok) throw new Error((await r.text()).trim());
     if (name === "exit") {
@@ -420,7 +422,7 @@ function render(s) {
   notice(actionMessage || s.Message || (s.Phase === "legacy-paused" ? "Start a new scan to review changes from this folder." : ""));
   show("model-panel", chosenOperation !== "duplicates" && !s.ModelReady);
   show("rename-options", chosenOperation === "rename");
-  for (const id of ["partial", "preview-only", "media-samples"]) {
+  for (const id of ["partial", "media-samples"]) {
     el(id).closest("label").hidden = chosenOperation === "duplicates";
   }
   el("scan-operation").disabled = s.Busy;
@@ -448,7 +450,7 @@ function render(s) {
   const canResume = hadWork && s.Phase === "paused" && !s.Busy;
   show("start", !s.Busy);
   show("start-fresh", !s.Busy);
-  el("start").textContent = hadWork ? "Start new scan" : "Start scan";
+  el("start").textContent = "Start new scan";
   show("resume", canResume && !differentFolder);
   show("restore-run-folder", canResume && differentFolder);
   const runHint = s.StartingRoot ? "Finding files in " + s.StartingRoot
@@ -476,10 +478,12 @@ function render(s) {
   el("media-samples").disabled = s.Busy || partial;
   el("preview-only").disabled = s.Busy || scanProfile?.effective.execution.mode === "preview_only";
   el("auto").disabled ||= el("preview-only").checked;
-  show("progress-panel", hadWork && !pendingScan);
+  show("progress-panel", true);
+  show("prototype-progress-summary", hadWork || Boolean(s.StartingRoot));
+  show("progress", hadWork || Boolean(s.StartingRoot));
   el("run-folder").textContent = s.Root || "";
   el("run-scope").textContent = s.ScopeDescription || "";
-  el("run-inventory").textContent = describeInventory(s) + (!s.Busy && s.OutcomeReason ? " · " + s.OutcomeReason : "");
+  el("run-inventory").textContent = hadWork ? describeInventory(s) + (!s.Busy && s.OutcomeReason ? " · " + s.OutcomeReason : "") : (s.StartingRoot ? "Finding files…" : "Ready to start a scan");
   const clock = s.Clock;
   const hasTiming = Boolean(hadWork && clock?.Started && !clock.Started.startsWith("0001"));
   show("run-time", hasTiming);
@@ -492,8 +496,8 @@ function render(s) {
   el("progress").value = pc;
   el("progress").max = 100;
   el("current").textContent = s.Current;
-  for (const [id, key] of [["renamed","Renamed"],["kept","Kept"],["flagged","Flagged"],["skipped","Skipped"],["metadata-done","MetadataDone"]]) {
-    el(id).textContent = s[key].toLocaleString();
+  for (const [id, key] of [["renamed","Renamed"],["moved","Moved"],["kept","Kept"],["flagged","Flagged"],["skipped","Skipped"],["metadata-done","MetadataDone"]]) {
+    el(id).textContent = (s[key] || 0).toLocaleString();
   }
   show("export", hadWork && !s.Busy && s.Flagged > 0);
   show("flag-scroll", s.Flagged > 0);
@@ -548,7 +552,7 @@ function render(s) {
   }
   if (s.Job) el("history").value = s.Job;
   show("comparison-panel", !s.Busy && (s.Jobs || []).length > 1);
-  if (started && currentView === "scan") selectView("review");
+  if (typeof renderConsole === "function") renderConsole(s);
 }
 
 async function refresh() {

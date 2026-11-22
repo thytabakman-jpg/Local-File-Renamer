@@ -182,6 +182,10 @@ func immediateChatPlan(message string) (chatPlan, bool) {
 		action = "resume"
 	case "show proposals", "list proposals":
 		action = "proposals"
+	case "show auto-renamed files", "show automatically changed files":
+		return chatPlan{Action: "show_filtered"}, true
+	case "show flagged files", "show flagged items":
+		return chatPlan{Action: "show_filtered", Flagged: true}, true
 	case "show report", "scan report":
 		action = "report"
 	}
@@ -391,6 +395,30 @@ func (a *application) executeChat(ctx context.Context, plan chatPlan, folder str
 		}
 		r := report.Receipt
 		response.Message = fmt.Sprintf("%d assessments completed, %d pending, %d skipped, %d failed, and %d files not assessed. %d renames completed and %d pending.", r.Assessments.Completed, r.Assessments.Pending, r.Assessments.Skipped, r.Assessments.Failed, r.NotAssessed, r.Renames.Completed, r.Renames.Pending)
+	case "show_filtered":
+		filter := "auto"
+		if plan.Flagged {
+			filter = "flagged"
+		}
+		page, err := a.reviewInspections(max(0, plan.Offset), false, filter)
+		if err != nil {
+			return response, err
+		}
+		for _, row := range page.Rows {
+			from, to, note := row.Path, row.Proposed, row.Note
+			if !plan.Flagged {
+				from, to, note = row.AutomaticFrom, row.AutomaticTo, row.AutomaticReason
+				if row.AutomaticUndone {
+					note = joinNote(note, "Automatic change undone")
+				}
+			}
+			response.Proposals = append(response.Proposals, proposalRow{Index: row.Index, From: from, To: to, Note: note})
+		}
+		label := "flagged"
+		if !plan.Flagged {
+			label = "automatically renamed"
+		}
+		response.Message = fmt.Sprintf("%d %s files. Showing %d.", page.Total, label, len(page.Rows))
 	case "proposals":
 		if v.Operation == scanMove || v.Operation == scanDuplicates {
 			return a.chatResults(v, plan.ExactOnly)

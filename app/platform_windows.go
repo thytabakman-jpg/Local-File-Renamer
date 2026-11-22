@@ -58,6 +58,8 @@ func renameNoReplace(from, to string) error {
 	return windows.MoveFileEx(a, b, windows.MOVEFILE_WRITE_THROUGH)
 }
 
+const recycleAvailable = true
+
 func recycleFile(path string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

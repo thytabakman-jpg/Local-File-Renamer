@@ -187,13 +187,18 @@ func writeTestZip(t *testing.T, path string, entries map[string]string) {
 func writeTestPDF(t *testing.T, path string) {
 	t.Helper()
 	content := "BT /F1 12 Tf 72 700 Td (Title: Trees and Rivers) Tj ET BT /F1 12 Tf 72 675 Td (Author: Jane & John Doe) Tj ET\n"
+	writeTestPDFContent(t, path, content, "<< /Title (Old Title) >>")
+}
+
+func writeTestPDFContent(t *testing.T, path, content, info string) {
+	t.Helper()
 	objects := []string{
 		"<< /Type /Catalog /Pages 2 0 R >>",
 		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
 		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
 		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(content), content),
-		"<< /Title (Old Title) >>",
+		info,
 	}
 	var b strings.Builder
 	b.WriteString("%PDF-1.4\n")

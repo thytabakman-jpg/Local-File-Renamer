@@ -96,7 +96,7 @@ func buildSuggestion(s *session, i int, d decision, st stamp, revision bool) rec
 		}
 	}
 	auto := mv != nil && d.Folder == "" && d.Strict && d.AutoEvidence && !d.Unknown && d.Note == "" &&
-		!placeholder.MatchString(name) && len(removedDetails(filepath.Base(item.Path), name)) == 0
+		!placeholder.MatchString(name) && (d.ReplaceDownloadID || len(removedDetails(filepath.Base(item.Path), name)) == 0)
 	if d.Outcome == "" {
 		switch {
 		case st.ID == "":

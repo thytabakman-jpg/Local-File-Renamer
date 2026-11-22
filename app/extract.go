@@ -31,6 +31,7 @@ import (
 type evidence struct {
 	Text, Title, Author, Year, Venue, Publisher, Kind, Note, Summary string
 	Photo                                                            []byte
+	ArticleFrontMatter                                               bool
 }
 
 const excerpt = 10000
@@ -132,6 +133,9 @@ func pdfSample(path string, first, last int) (e evidence) {
 	var out strings.Builder
 	for i := first; i <= min(doc.NumPage(), last) && out.Len() < excerpt; i++ {
 		p := doc.Page(i)
+		if i == 1 {
+			readArticleFrontMatter(p, &e)
+		}
 		fonts := map[string]*pdf.Font{}
 		for _, key := range p.Fonts() {
 			if fonts[key] == nil {

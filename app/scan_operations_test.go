@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -138,7 +139,7 @@ func TestDuplicateCheckStaysReadOnlyAndSavesResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := waitForOperation(t, a)
-	if state.Operation != scanDuplicates || !state.PreviewOnly || state.Proposed != 0 {
+	if state.Operation != scanDuplicates || state.Renamed != 0 || state.Proposed != 0 {
 		t.Fatalf("Duplicate scan exposed write proposals: %+v", state)
 	}
 	if err := a.selectJob(state.Job); err != nil {
@@ -163,5 +164,74 @@ func TestDuplicateCheckStaysReadOnlyAndSavesResults(t *testing.T) {
 		if err != nil || string(got) != want {
 			t.Fatalf("Duplicate check changed %s: %s, %v", path, got, err)
 		}
+	}
+}
+
+func TestDuplicateReviewCompareVersionsAndRecycleExactCopies(t *testing.T) {
+	base, home := t.TempDir(), t.TempDir()
+	root := filepath.Join(base, "files")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{
+		"Study v1.txt":   "The earlier study contains these introductory results.",
+		"Study v2.txt":   "The updated study contains these introductory results and new evidence.",
+		"Study v10.txt":  "The last study contains these introductory results and a complete analysis.",
+		"Original.txt":   "A complete sentence with the same contents under an unrelated filename.",
+		"Other.txt":      "A complete sentence with the same contents under an unrelated filename.",
+		"Reformatted.md": "A complete sentence with the same contents under an unrelated filename.\n",
+	}
+	for name, body := range paths {
+		writeScanFile(t, filepath.Join(root, name), body)
+	}
+	a, err := newApp(home, filepath.Join(home, "engine"), filepath.Join(home, "models"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { a.s.close(); a.chat.cancel() }()
+	if err := a.startUIOperation(root, true, false, false, false, false, nil, nil, false, scanDuplicates); err != nil {
+		t.Fatal(err)
+	}
+	state := waitForOperation(t, a)
+	results, err := a.scanResults(state.Job)
+	if err != nil || len(results.Exact) != 1 || len(results.Possible) != 2 {
+		t.Fatalf("%+v %v", results, err)
+	}
+	exact := results.Exact[0].Members
+	var versions []duplicateMember
+	for _, g := range results.Possible {
+		if g.Grouping == "Similar filenames" {
+			versions = g.Members
+		}
+	}
+	if len(versions) != 3 || versions[0].Version != "1" || versions[1].Version != "2" || versions[2].Version != "10" {
+		t.Fatalf("version order: %+v", versions)
+	}
+	ctx := context.Background()
+	if report, err := a.compareDuplicateFiles(ctx, state.Job, versions[0].Index, versions[1].Index); err != nil || report.Verdict != "Different text samples" {
+		t.Fatalf("%+v: %v", report, err)
+	}
+	if report, err := a.compareDuplicateFiles(ctx, state.Job, exact[0].Index, exact[1].Index); err != nil || report.Verdict != "Exact duplicate" {
+		t.Fatalf("%+v: %v", report, err)
+	}
+	if _, err := a.recycleMatchedCopies(ctx, state.Job, state.Revision, exact[0].Index, []int{versions[0].Index}, os.Remove); err == nil {
+		t.Fatal("allowed recycling a non-identical file")
+	}
+	count, err := a.recycleMatchedCopies(ctx, state.Job, state.Revision, exact[0].Index, []int{exact[1].Index}, os.Remove)
+	if count != 1 || err != nil {
+		t.Fatalf("recycled %d: %v", count, err)
+	}
+	if _, err := os.Stat(exact[0].Path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(exact[1].Path); !os.IsNotExist(err) {
+		t.Fatalf("extra remains: %v", err)
+	}
+	if err := a.selectJob(state.Job); err != nil {
+		t.Fatal(err)
+	}
+	results, err = a.scanResults(state.Job)
+	if err != nil || len(results.Exact) != 0 || results.Recycled != 1 {
+		t.Fatalf("saved duplicate state %+v %v", results, err)
 	}
 }

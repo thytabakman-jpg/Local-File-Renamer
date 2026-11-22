@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -37,14 +38,17 @@ type moveFolder struct {
 }
 
 type duplicateGroup struct {
-	Files []string
+	Files                     []string
+	Members                   []duplicateMember
+	Grouping, VersionEvidence string
 }
 
 type operationResults struct {
-	Folders  []moveFolder
-	Exact    []duplicateGroup
-	Possible []duplicateGroup
-	Skipped  int
+	Folders           []moveFolder
+	Exact             []duplicateGroup
+	Possible          []duplicateGroup
+	Skipped, Recycled int
+	CanRecycle        bool
 }
 
 func (a *application) scanResults(id string) (operationResults, error) {
@@ -240,12 +244,22 @@ func (a *application) runDuplicates(ctx context.Context, s *session) {
 				relative, relErr := filepath.Rel(s.manifest.Root, item.Path)
 				if relErr == nil {
 					r.Digest, err = scopedDuplicateHash(ctx, root, relative)
+					if err == nil {
+						r.Stamp, err = fingerprint(item.Path)
+					}
+					if err == nil {
+						if text := duplicateText(item.Path, r.Stamp); text != "" {
+							digest := sha256.Sum256([]byte(text))
+							r.TextDigest = hex.EncodeToString(digest[:])
+						}
+					}
 				} else {
 					err = relErr
 				}
 			}
 			if err != nil {
 				r.Decision, r.Note = "Skipped", err.Error()
+				r.Digest, r.TextDigest = "", ""
 			}
 		}
 		if ctx.Err() != nil {
@@ -294,7 +308,7 @@ func scopedDuplicateHash(ctx context.Context, root *os.Root, path string) (strin
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-var copySuffix = regexp.MustCompile(`(?i)\s*(?:\([0-9]+\)|[ _-]+(?:copy(?:[ _-]*[0-9]+)?|(?:version|rev|v)[ _-]*[0-9]+(?:\.[0-9]+)*))$`)
+var copySuffix = regexp.MustCompile(`(?i)\s*(?:\([0-9]+\)|[ _-]+(?:copy(?:[ _-]*[0-9]+)?|(?:version|rev|draft|v)[ _-]*[0-9]+(?:\.[0-9]+)*))$`)
 
 func similarFilename(path string) string {
 	stem := baseName(filepath.Base(path))
@@ -309,33 +323,53 @@ func similarFilename(path string) string {
 }
 
 func (s *session) duplicateResults() operationResults {
-	exact := make(map[string][]string)
-	possible := make(map[string][]record)
-	var result operationResults
+	exact := make(map[string][]record)
+	byName := make(map[string][]record)
+	byText := make(map[string][]record)
+	result := operationResults{Recycled: s.recycled, CanRecycle: recycleAvailable && s.settings().Execution.Mode != "preview_only"}
 	for _, plan := range s.plans {
+		if plan.Decision == removedFlaggedFile {
+			continue
+		}
 		if plan.Digest == "" {
 			result.Skipped++
 			continue
 		}
-		exact[plan.Digest] = append(exact[plan.Digest], plan.Path)
+		exact[plan.Digest] = append(exact[plan.Digest], plan)
 		if key := similarFilename(plan.Path); key != "" {
-			possible[key] = append(possible[key], plan)
+			byName[key] = append(byName[key], plan)
+		}
+		if plan.TextDigest != "" {
+			byText[plan.TextDigest] = append(byText[plan.TextDigest], plan)
 		}
 	}
-	for _, paths := range exact {
-		if len(paths) > 1 {
-			result.Exact = append(result.Exact, duplicateGroup{Files: paths})
+	for _, group := range exact {
+		if len(group) > 1 {
+			result.Exact = append(result.Exact, s.describeDuplicates(group, "Identical file contents"))
 		}
 	}
-	for _, plans := range possible {
-		if len(plans) < 2 || !slices.ContainsFunc(plans[1:], func(plan record) bool { return plan.Digest != plans[0].Digest }) {
-			continue
+	// A group with the same members only needs one entry. Prefer the text evidence.
+	seen := make(map[string]bool)
+	for _, data := range []struct {
+		groups map[string][]record
+		label  string
+	}{
+		{byText, "Matching text samples"}, {byName, "Similar filenames"},
+	} {
+		for _, group := range data.groups {
+			if len(group) < 2 || !slices.ContainsFunc(group[1:], func(p record) bool { return p.Digest != group[0].Digest }) {
+				continue
+			}
+			var key strings.Builder
+			for _, p := range group {
+				fmt.Fprintf(&key, "%d,", p.Index)
+			}
+			if seen[key.String()] {
+				continue
+			}
+			seen[key.String()] = true
+			result.Possible = append(result.Possible, s.describeDuplicates(group, data.label))
 		}
-		files := make([]string, 0, len(plans))
-		for _, plan := range plans {
-			files = append(files, plan.Path)
-		}
-		result.Possible = append(result.Possible, duplicateGroup{Files: files})
 	}
 	for _, groups := range [][]duplicateGroup{result.Exact, result.Possible} {
 		slices.SortFunc(groups, func(a, b duplicateGroup) int { return strings.Compare(a.Files[0], b.Files[0]) })
