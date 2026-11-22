@@ -2,16 +2,16 @@
 set -eu
 cd "$(dirname "$0")"
 work=$(mktemp -d)
-trap 'rm -rf "$work"; rm -f installer/payload.zip icon_windows_amd64.syso installer/icon_windows_amd64.syso' EXIT
+trap 'rm -rf "$work"; rm -f installer/payload.zip app/icon_windows_amd64.syso installer/icon_windows_amd64.syso' EXIT
 mkdir -p build
 if [ -n "${RSRC_BIN:-}" ]; then
- "$RSRC_BIN" -ico icon.ico -arch amd64 -o icon_windows_amd64.syso
+ "$RSRC_BIN" -ico app/icon.ico -arch amd64 -o app/icon_windows_amd64.syso
 else
- go run github.com/akavel/rsrc@v0.10.2 -ico icon.ico -arch amd64 -o icon_windows_amd64.syso
+ go run github.com/akavel/rsrc@v0.10.2 -ico app/icon.ico -arch amd64 -o app/icon_windows_amd64.syso
 fi
-cp icon_windows_amd64.syso installer/icon_windows_amd64.syso
+cp app/icon_windows_amd64.syso installer/icon_windows_amd64.syso
 export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
-go build -buildvcs=false -trimpath -ldflags '-s -w -H windowsgui' -o "$work/LocalFileRenamer.exe" .
+go build -buildvcs=false -trimpath -ldflags '-s -w -H windowsgui' -o "$work/LocalFileRenamer.exe" ./app
 archive=${LLAMA_CPU_ZIP:-$work/llama-win.zip}
 if [ -z "${LLAMA_CPU_ZIP:-}" ]; then
  curl --fail --silent --show-error --location \
@@ -44,4 +44,12 @@ with zipfile.ZipFile(archive) as upstream, zipfile.ZipFile("installer/payload.zi
     for path in sorted(Path("licenses").iterdir()):
         setup.write(path, path.as_posix())
 PY
-go build -buildvcs=false -trimpath -ldflags '-s -w -H windowsgui' -o build/LocalFileRenamer-Setup-3.1.exe ./installer
+go build -buildvcs=false -trimpath -ldflags '-s -w -H windowsgui' -o build/LocalFileRenamer-Setup-3.2.exe ./installer
+python3 - <<'PYZIP'
+from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
+
+setup = Path("build/LocalFileRenamer-Setup-3.2.exe")
+with ZipFile("build/LocalFileRenamer-Installer-3.2.zip", "w", ZIP_DEFLATED) as archive:
+    archive.write(setup, setup.name)
+PYZIP
