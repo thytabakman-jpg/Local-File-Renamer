@@ -344,7 +344,7 @@ async function action(name, fields = {}) {
     const r = await fetch("/api/action", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: name, ...fields }),
-      ...(["pick","recycle-duplicates","recycle-duplicate-groups"].includes(name) ? {} : {signal:AbortSignal.timeout(15000)})
+      ...(["pick","recycle-duplicates","recycle-duplicate-groups","recycle-verified-duplicates"].includes(name) ? {} : {signal:AbortSignal.timeout(15000)})
     });
     if (!r.ok) throw new Error((await r.text()).trim());
     if (name === "exit") {

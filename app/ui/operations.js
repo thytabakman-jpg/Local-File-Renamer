@@ -7,30 +7,10 @@ let selectedFolder = "";
 let selectedMove;
 let duplicateView = "exact";
 let duplicateSelections = [];
-let duplicatePairs = [];
-let comparisonQueue;
+let verifiedGroups = [];
+let verifiedCanRecycle = false;
+let skippedRecommendations = new Set();
 let recycleBatchRunning = false;
-
-function stopDuplicateComparisons() {
-  comparisonQueue?.abort();
-  comparisonQueue = undefined;
-}
-
-function startDuplicateComparisons() {
-  if (comparisonQueue || currentView !== "review" || duplicateView !== "possible" || latest.Operation !== "duplicates") return;
-  const queue = new AbortController();
-  comparisonQueue = queue;
-  (async () => {
-    try {
-      for (const pair of duplicatePairs) {
-        if (queue.signal.aborted) return;
-        await pair(queue.signal);
-      }
-    } finally {
-      if (comparisonQueue === queue) comparisonQueue = undefined;
-    }
-  })();
-}
 
 el("retry-operation-results").onclick = () => {
   operationKey = "";
@@ -49,7 +29,6 @@ async function updateOperationReview(state) {
   show("operation-undo", moving && !state.Busy && state.UndoLeft > 0);
   if (state.Busy) {
     operationKey = "";
-    stopDuplicateComparisons();
     show("retry-operation-results", false);
     show("move-results", false);
     show("duplicate-results", false);
@@ -59,8 +38,6 @@ async function updateOperationReview(state) {
   const key = [state.Job, state.Revision, state.Phase].join(":");
   if (operationKey === key) return;
   operationKey = key;
-  stopDuplicateComparisons();
-  duplicatePairs = [];
   show("retry-operation-results", false);
   show("move-results", false);
   show("duplicate-results", false);
@@ -68,6 +45,7 @@ async function updateOperationReview(state) {
   if (operationJob !== state.Job) {
     operationJob = state.Job;
     selectedFolder = "";
+    skippedRecommendations.clear();
     el("duplicate-recycle-receipt").replaceChildren();
   }
   try {
@@ -87,9 +65,14 @@ async function updateOperationReview(state) {
       el("operation-status").textContent = summary + (count ? count + " proposed moves" : state.OutcomeReason || "No proposed moves remain") + (state.PreviewOnly ? " · Preview only" : "");
     } else {
       duplicateSelections = [];
-      drawDuplicateGroups("exact-duplicates", data.Exact, true, data.CanRecycle, state);
+      drawExactDuplicates(data.Exact, data.CanRecycle, state);
       updateDuplicateApproval();
-      drawDuplicateGroups("possible-duplicates", data.Possible, false, false, state);
+      verifiedGroups = data.Verified || [];
+      verifiedCanRecycle = data.CanRecycle;
+      const unresolved = data.Unresolved || 0;
+      el("verified-duplicate-summary").textContent = unresolved ?
+        unresolved + " candidate groups left alone because equivalence could not be confirmed." : "";
+      drawVerifiedDuplicates(state);
       el("operation-status").textContent = summary + (state.Done - data.Skipped) + " files checked · " + data.Skipped + " skipped" + (data.Recycled ? " · " + data.Recycled + " recycled" : "");
     }
     show("move-results", moving);
@@ -190,14 +173,12 @@ function drawMoveReview() {
 
 function selectDuplicateView(view) {
   duplicateView = view;
-  if (view === "exact") stopDuplicateComparisons();
   for (const button of document.querySelectorAll("[data-duplicate-view]")) {
     button.setAttribute("aria-pressed", String(button.dataset.duplicateView === view));
   }
   for (const panel of document.querySelectorAll("[data-duplicate-panel]")) {
     panel.hidden = panel.dataset.duplicatePanel !== view;
   }
-  if (view === "possible") startDuplicateComparisons();
 }
 
 for (const button of document.querySelectorAll("[data-duplicate-view]")) {
@@ -218,12 +199,133 @@ el("accept-duplicate-recommendations").onclick = async () => {
   if (!groups.length) return;
   const count = groups.reduce((sum, group) => sum + group.indices.length, 0);
   if (!window.confirm("Keep the selected originals and send " + count + " exact copies from " + groups.length + " groups to the Recycle Bin?")) return;
-  const {Job, Revision} = latest;
+  submitDuplicateApproval(latest, groups, "recycle-duplicate-groups");
+};
+
+function approvalGroups() {
+  return verifiedGroups.filter(group => !skippedRecommendations.has(group.RecommendedKeeper));
+}
+
+function updateVerifiedApproval() {
+  const button = el("approve-all-verified");
+  show("approve-all-verified", verifiedCanRecycle && approvalGroups().length > 0);
+  button.disabled = recycleBatchRunning;
+  for (const approve of el("verified-duplicates").querySelectorAll("[data-approve-copy]")) {
+    approve.disabled = recycleBatchRunning;
+  }
+}
+
+function drawVerifiedDuplicates(state) {
+  const target = el("verified-duplicates");
+  const groups = approvalGroups();
+  target.replaceChildren(...groups.map(group => {
+    const panel = document.createElement("fieldset");
+    panel.className = "operation-duplicate-group";
+    const keeper = group.Members.find(member => member.Index === group.RecommendedKeeper);
+    const copies = group.Members.filter(member => member.Index !== keeper.Index);
+    const finding = document.createElement("p");
+    finding.textContent = "What we found: " + group.Finding;
+    const recommendation = document.createElement("p");
+    recommendation.textContent = "Recommendation: Keep " + keeper.Path + ". " + group.KeeperReason;
+    const summary = document.createElement("summary");
+    summary.textContent = copies.length + (copies.length === 1 ? " copy" : " copies") + " to recycle";
+    const details = document.createElement("details");
+    const paths = document.createElement("ul");
+    for (const copy of copies) {
+      const row = document.createElement("li");
+      row.textContent = copy.Path;
+      paths.append(row);
+    }
+    details.append(summary, paths);
+    details.open = true;
+    panel.append(finding, recommendation, details);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const compare = document.createElement("button");
+    compare.type = "button";
+    compare.className = "secondary";
+    compare.textContent = "View comparison";
+    const previews = document.createElement("div");
+    previews.className = "duplicate-comparison";
+    compare.setAttribute("aria-expanded", "false");
+    compare.onclick = () => {
+      const open = compare.getAttribute("aria-expanded") === "true";
+      compare.setAttribute("aria-expanded", String(!open));
+      compare.textContent = open ? "View comparison" : "Hide comparison";
+      previews.replaceChildren();
+      if (!open) for (const member of [keeper, ...copies]) renderComparisonPreview(previews, state.Job, member);
+    };
+    if (verifiedCanRecycle) {
+      const approve = document.createElement("button");
+      approve.type = "button";
+      approve.className = "primary";
+      approve.dataset.approveCopy = "";
+      approve.textContent = "Approve";
+      approve.onclick = () => confirmVerifiedDuplicates(state, [group]);
+      actions.append(approve);
+    }
+    const skip = document.createElement("button");
+    skip.type = "button";
+    skip.className = "secondary";
+    skip.textContent = "Skip";
+    skip.onclick = () => {
+      skippedRecommendations.add(group.RecommendedKeeper);
+      drawVerifiedDuplicates(state);
+    };
+    actions.append(skip, compare);
+    panel.append(actions, previews);
+    return panel;
+  }));
+  if (!groups.length) {
+    target.textContent = skippedRecommendations.size ? "No remaining cleanup recommendations. Skipped files were kept." :
+      "No verified cleanup recommendations.";
+  }
+  if (!verifiedCanRecycle && groups.length) {
+    const note = document.createElement("p");
+    note.textContent = state.PreviewOnly ? "Preview only. Start a new scan with Review enabled to recycle copies." : "The Recycle Bin is available on Windows.";
+    target.prepend(note);
+  }
+  updateVerifiedApproval();
+}
+
+el("approve-all-verified").onclick = () => confirmVerifiedDuplicates(latest, approvalGroups());
+
+function confirmVerifiedDuplicates(state, groups) {
+  if (recycleBatchRunning || !verifiedCanRecycle || !groups.length) return;
+  const dialog = el("duplicate-approval-dialog");
+  const files = el("duplicate-approval-files");
+  files.replaceChildren();
+  const selections = groups.map(group => {
+    const keep = group.RecommendedKeeper;
+    const copies = group.Members.filter(member => member.Index !== keep);
+    const label = document.createElement("p");
+    label.textContent = "Keep " + group.Members.find(member => member.Index === keep).Path;
+    const list = document.createElement("ul");
+    for (const copy of copies) {
+      const item = document.createElement("li");
+      item.textContent = "Recycle " + copy.Path;
+      list.append(item);
+    }
+    files.append(label, list);
+    return {keep, indices: copies.map(copy => copy.Index)};
+  });
+  dialog.returnValue = "cancel";
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue === "approve") submitDuplicateApproval(state, selections, "recycle-verified-duplicates");
+  }, {once: true});
+  dialog.showModal();
+}
+
+async function submitDuplicateApproval(state, groups, actionName) {
+  const {Job, Revision} = state;
+  if (recycleBatchRunning || latest.Job !== Job || latest.Revision !== Revision) return;
+  const count = groups.reduce((sum, group) => sum + group.indices.length, 0);
   recycleBatchRunning = true;
   el("duplicate-recycle-receipt").textContent = "Checking selected copies before recycling…";
   updateDuplicateApproval();
+  updateVerifiedApproval();
   try {
-    const result = await action("recycle-duplicate-groups", {id:Job, revision:Revision, duplicateGroups:groups});
+    const result = await action(actionName, {id:Job, revision:Revision, duplicateGroups:groups});
     if (latest.Job !== Job) return;
     if (!result) {
       el("duplicate-recycle-receipt").textContent = "The recycle request failed. Check the scan results before retrying.";
@@ -242,13 +344,15 @@ el("accept-duplicate-recommendations").onclick = async () => {
   } finally {
     recycleBatchRunning = false;
     updateDuplicateApproval();
+    updateVerifiedApproval();
   }
-};
+}
 
-function drawDuplicateGroups(id, groups, exact, canRecycle, state) {
+function drawExactDuplicates(groups, canRecycle, state) {
+  const id = "exact-duplicates";
   const target = el(id);
   if (!groups?.length) {
-    target.textContent = exact ? "No exact duplicates found." : "No possible duplicates found.";
+    target.textContent = "No exact duplicates found.";
     return;
   }
   target.replaceChildren(...groups.map((group, order) => {
@@ -265,12 +369,6 @@ function drawDuplicateGroups(id, groups, exact, canRecycle, state) {
       line.className = "duplicate-file-row";
       const details = document.createElement("span");
       details.textContent = member.Path;
-      if (member.Version || !exact) {
-        const info = document.createElement("small");
-        const date = member.Modified?.startsWith("0001") ? "" : new Date(member.Modified).toLocaleString();
-        info.textContent = [member.Version ? "Version " + member.Version : "No version label", date].filter(Boolean).join(" · ");
-        details.append(document.createElement("br"), info);
-      }
       if (canRecycle) {
         const controls = document.createElement("span");
         const radio = document.createElement("input");
@@ -309,15 +407,9 @@ function drawDuplicateGroups(id, groups, exact, canRecycle, state) {
       panel.append(labels);
     }
     panel.append(...rows);
-    if (group.VersionEvidence) {
-      const reason = document.createElement("p");
-      reason.className = "run-hint";
-      reason.textContent = group.VersionEvidence;
-      panel.append(reason);
-    }
     const actions = document.createElement("div");
     actions.className = "actions";
-    if (exact && !canRecycle) {
+    if (!canRecycle) {
       const disabled = document.createElement("p");
       disabled.className = "run-hint";
       disabled.textContent = state.PreviewOnly ? "Preview only. Start a new scan with Review enabled to recycle copies." : "The Recycle Bin is available on Windows.";
@@ -343,14 +435,14 @@ function drawDuplicateGroups(id, groups, exact, canRecycle, state) {
     let request;
     let requestKey;
     let requestController;
-    async function compare(signal) {
+    async function compare() {
       const [first, second] = picks.map(pick => pick.value);
       if (first === second) {
         status.textContent = "Choose two different files.";
         return;
       }
       const key = first + ":" + second;
-      if (key === compared || signal?.aborted) return;
+      if (key === compared) return;
       if (request && requestKey === key && !requestController.signal.aborted) return request;
       requestController?.abort();
       const controller = new AbortController();
@@ -362,16 +454,15 @@ function drawDuplicateGroups(id, groups, exact, canRecycle, state) {
         try {
           const query = new URLSearchParams({job:state.Job,first,second});
           const signals = [controller.signal, AbortSignal.timeout(30000)];
-          if (signal) signals.push(signal);
           const response = await fetch("/api/compare-duplicates?" + query, {signal:AbortSignal.any(signals)});
           if (!response.ok) throw new Error((await response.text()).trim());
           const result = await response.json();
-          if (signal?.aborted || controller.signal.aborted || !panel.isConnected || picks.map(pick => pick.value).join(":") !== key) return;
+          if (controller.signal.aborted || !panel.isConnected || picks.map(pick => pick.value).join(":") !== key) return;
           compared = key;
           report = result;
           status.textContent = result.Recommendation + " · " + result.Verdict + " · " + result.Detail;
         } catch (err) {
-          if (!signal?.aborted && !controller.signal.aborted && picks.map(pick => pick.value).join(":") === key) {
+          if (!controller.signal.aborted && picks.map(pick => pick.value).join(":") === key) {
             status.textContent = "Needs your judgment. " + err.message;
           }
         } finally {
@@ -380,18 +471,13 @@ function drawDuplicateGroups(id, groups, exact, canRecycle, state) {
       })();
       return request;
     }
-    if (!exact) {
-      status.textContent = "Waiting to compare this pair…";
-      duplicatePairs.push(compare);
-    }
     for (const pick of picks) {
       pick.onchange = () => {
         requestController?.abort();
         compared = "";
         report = undefined;
         preview.replaceChildren();
-        if (!exact) compare();
-        else status.textContent = "";
+        status.textContent = "";
       };
     }
     button.onclick = async () => {

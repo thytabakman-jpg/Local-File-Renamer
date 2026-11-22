@@ -66,7 +66,7 @@ type record struct {
 	Kind, Decision, Reason, OverrideKind         string               `json:",omitempty"`
 	Move                                         *move                `json:",omitempty"`
 	Inspection                                   inspection           `json:",omitempty"`
-	Digest, TextDigest                           string               `json:",omitempty"`
+	Digest, TextDigest, EquivalentDigest         string               `json:",omitempty"`
 	Stamp                                        stamp                `json:",omitempty"`
 	Unknown, Auto, Partial, AutoValidated, Rough bool                 `json:",omitempty"`
 	Metadata                                     *metadataEdit        `json:",omitempty"`

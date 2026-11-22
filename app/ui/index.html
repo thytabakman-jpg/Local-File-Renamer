@@ -16,7 +16,7 @@
   <main>
     <noscript><p>Enable JavaScript or open the app in another browser to use its controls.</p></noscript>
     <aside class="side-nav">
-      <div class="brand"><img class="mark" src="/mark.png" alt=""><h1>Local File Renamer <small id="app-version">3.4</small></h1></div>
+      <div class="brand"><img class="mark" src="/mark.png" alt=""><h1>Local File Renamer <small id="app-version">3.5</small></h1></div>
       <nav class="view-tabs" aria-label="Renamer views">
         <button type="button" id="scan-tab" data-view="scan" aria-pressed="true">New scan</button>
         <button type="button" data-view="review" aria-pressed="false">Review</button>
@@ -112,7 +112,7 @@
         <div class="prototype-rail-cap" id="prototype-operation-phase">Review</div>
         <div id="prototype-duplicate-nav" class="prototype-page-rail" hidden>
           <button type="button" data-duplicate-view="exact" aria-pressed="true">Exact duplicates</button>
-          <button type="button" data-duplicate-view="possible" aria-pressed="false">Possible duplicates</button>
+          <button type="button" data-duplicate-view="verified" aria-pressed="false">Recommended cleanup</button>
         </div>
         <div id="prototype-move-rail" hidden><nav class="review-list" aria-label="Proposed folder tree"><ul id="move-tree" class="folder-tree"></ul></nav></div>
       </aside>
@@ -147,10 +147,12 @@
           <section data-duplicate-panel="exact" class="card"><h3>Exact duplicates</h3>
           <div id="exact-duplicates"></div>
           <button id="accept-duplicate-recommendations" class="primary" type="button" hidden>Accept recommendations</button>
-          <div id="duplicate-recycle-receipt" role="status"></div></section>
-          <section data-duplicate-panel="possible" class="card" hidden><h3>Possible duplicates</h3>
-          <p class="run-hint">Recommendations compare the selected pair in each group. You can choose another pair and open both previews.</p>
-          <div id="possible-duplicates"></div></section>
+          </section>
+          <section data-duplicate-panel="verified" class="card" hidden><h3>Recommended cleanup</h3>
+          <p id="verified-duplicate-summary" class="run-hint"></p>
+          <div id="verified-duplicates"></div>
+          <button id="approve-all-verified" type="button" class="primary" hidden>Approve all</button></section>
+          <div id="duplicate-recycle-receipt" role="status"></div>
         </div>
       </section>
       </div>
@@ -402,6 +404,16 @@
         <div class="actions"><button type="submit" class="quiet">Cancel</button><button id="save-correction" type="button" class="primary">Save correction</button></div>
       </form>
     </dialog>
+  <dialog id="duplicate-approval-dialog" aria-labelledby="duplicate-approval-title">
+    <form method="dialog">
+      <h2 id="duplicate-approval-title">Confirm recommended cleanup</h2>
+      <div id="duplicate-approval-files"></div>
+      <div class="actions">
+        <button type="submit" value="cancel" class="secondary" autofocus>Cancel</button>
+        <button type="submit" id="confirm-duplicate-approval" value="approve" class="primary">Send to Recycle Bin</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="bug-report-dialog">
   <form method="dialog">
     <h2>Copy bug report</h2>

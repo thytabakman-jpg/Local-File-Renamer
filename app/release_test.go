@@ -192,13 +192,29 @@ func writeTestPDF(t *testing.T, path string) {
 
 func writeTestPDFContent(t *testing.T, path, content, info string) {
 	t.Helper()
+	writeTestPDFPages(t, path, []string{content}, info, "")
+}
+
+func writeTestPDFPages(t *testing.T, path string, pages []string, info, pageExtra string) {
+	t.Helper()
+	var kids strings.Builder
+	for i := range pages {
+		fmt.Fprintf(&kids, " %d 0 R", 5+2*i)
+	}
 	objects := []string{
 		"<< /Type /Catalog /Pages 2 0 R >>",
-		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
-		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+		fmt.Sprintf("<< /Type /Pages /Count %d /Kids [%s ] >>", len(pages), kids.String()),
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(content), content),
 		info,
+	}
+	for i, content := range pages {
+		extra := ""
+		if i == len(pages)-1 {
+			extra = pageExtra
+		}
+		objects = append(objects,
+			fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R %s >>", 6+2*i, extra),
+			fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(content), content))
 	}
 	var b strings.Builder
 	b.WriteString("%PDF-1.4\n")
@@ -212,6 +228,6 @@ func writeTestPDFContent(t *testing.T, path, content, info string) {
 	for _, offset := range offsets {
 		fmt.Fprintf(&b, "%010d 00000 n \n", offset)
 	}
-	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R /Info 6 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R /Info 4 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
 	writeTestFile(t, path, b.String())
 }

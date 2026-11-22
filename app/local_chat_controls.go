@@ -412,17 +412,17 @@ func (a *application) chatResults(v view, exact bool) (chatReply, error) {
 	if v.Operation == scanDuplicates {
 		response := chatReply{Message: fmt.Sprintf("%d exact duplicate groups. %d files skipped.", len(results.Exact), results.Skipped)}
 		if !exact {
-			response.Message += fmt.Sprintf(" %d possible duplicate groups.", len(results.Possible))
+			response.Message += fmt.Sprintf(" %d cleanup recommendations. %d candidate groups left alone.", len(results.Verified), results.Unresolved)
 		}
 		for _, group := range results.Exact[:min(25, len(results.Exact))] {
 			response.Groups = append(response.Groups, chatResultGroup{"Exact duplicate", group.Files})
 		}
 		if !exact {
-			for _, group := range results.Possible[:min(25, len(results.Possible))] {
-				response.Groups = append(response.Groups, chatResultGroup{"Possible duplicate", group.Files})
+			for _, group := range results.Verified[:min(25, len(results.Verified))] {
+				response.Groups = append(response.Groups, chatResultGroup{group.Finding, group.Files})
 			}
 		}
-		if len(results.Exact) > 25 || !exact && len(results.Possible) > 25 {
+		if len(results.Exact) > 25 || !exact && len(results.Verified) > 25 {
 			response.Message += " Open Review for all groups."
 		}
 		return response, nil

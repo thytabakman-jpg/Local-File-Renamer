@@ -37,16 +37,17 @@ type moveFolder struct {
 }
 
 type duplicateGroup struct {
-	Files                                   []string
-	Members                                 []duplicateMember
-	Grouping, VersionEvidence, KeeperReason string
-	RecommendedKeeper                       int
+	Files                           []string
+	Members                         []duplicateMember
+	Grouping, KeeperReason, Finding string
+	RecommendedKeeper               int
 }
 
 type operationResults struct {
 	Folders           []moveFolder
 	Exact             []duplicateGroup
-	Possible          []duplicateGroup
+	Verified          []duplicateGroup
+	Unresolved        int
 	Skipped, Recycled int
 	CanRecycle        bool
 }
@@ -248,6 +249,7 @@ func (a *application) runDuplicates(ctx context.Context, s *session) {
 						r.Stamp, err = fingerprint(item.Path)
 					}
 					if err == nil {
+						r.EquivalentDigest = duplicateEquivalence(ctx, root, relative, r.Stamp, r.Digest)
 						if text := duplicateText(item.Path, r.Stamp); text != "" {
 							digest := sha256.Sum256([]byte(text))
 							r.TextDigest = hex.EncodeToString(digest[:])
@@ -319,6 +321,7 @@ func similarFilename(path string) string {
 
 func (s *session) duplicateResults() operationResults {
 	exact := make(map[string][]record)
+	equivalent := make(map[string][]record)
 	byName := make(map[string][]record)
 	byText := make(map[string][]record)
 	result := operationResults{Recycled: s.recycled, CanRecycle: recycleAvailable && s.settings().Execution.Mode != "preview_only"}
@@ -331,6 +334,9 @@ func (s *session) duplicateResults() operationResults {
 			continue
 		}
 		exact[plan.Digest] = append(exact[plan.Digest], plan)
+		if plan.EquivalentDigest != "" {
+			equivalent[plan.EquivalentDigest] = append(equivalent[plan.EquivalentDigest], plan)
+		}
 		if key := similarFilename(plan.Path); key != "" {
 			byName[key] = append(byName[key], plan)
 		}
@@ -343,16 +349,29 @@ func (s *session) duplicateResults() operationResults {
 			result.Exact = append(result.Exact, s.describeDuplicates(group, "Identical file contents"))
 		}
 	}
-	// A group with the same members only needs one entry. Prefer the text evidence.
+	verified := make(map[int]string)
+	for key, group := range equivalent {
+		// Finish overlapping exact cleanup first so one approval cannot recycle
+		// the keeper of another recommendation.
+		if len(group) < 2 || slices.ContainsFunc(group, func(p record) bool { return len(exact[p.Digest]) != 1 }) {
+			continue
+		}
+		recommendation := s.describeDuplicates(group, "Verified equivalent copies")
+		recommendation.Finding = equivalenceFinding(key)
+		result.Verified = append(result.Verified, recommendation)
+		for _, p := range group {
+			verified[p.Index] = key
+		}
+	}
+	// Count a candidate group once even when both signals found it.
 	seen := make(map[string]bool)
-	for _, data := range []struct {
-		groups map[string][]record
-		label  string
-	}{
-		{byText, "Matching text samples"}, {byName, "Similar filenames"},
-	} {
-		for _, group := range data.groups {
+	for _, groups := range []map[string][]record{byText, byName} {
+		for _, group := range groups {
 			if len(group) < 2 || !slices.ContainsFunc(group[1:], func(p record) bool { return p.Digest != group[0].Digest }) {
+				continue
+			}
+			proof := verified[group[0].Index]
+			if proof != "" && !slices.ContainsFunc(group[1:], func(p record) bool { return verified[p.Index] != proof }) {
 				continue
 			}
 			var key strings.Builder
@@ -363,10 +382,10 @@ func (s *session) duplicateResults() operationResults {
 				continue
 			}
 			seen[key.String()] = true
-			result.Possible = append(result.Possible, s.describeDuplicates(group, data.label))
+			result.Unresolved++
 		}
 	}
-	for _, groups := range [][]duplicateGroup{result.Exact, result.Possible} {
+	for _, groups := range [][]duplicateGroup{result.Exact, result.Verified} {
 		slices.SortFunc(groups, func(a, b duplicateGroup) int { return strings.Compare(a.Files[0], b.Files[0]) })
 	}
 	return result

@@ -12,14 +12,12 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
 type duplicateMember struct {
-	Index         int
-	Path, Version string
-	Modified      time.Time
+	Index int
+	Path  string
 }
 
 var duplicateVersion = regexp.MustCompile(`(?i)(?:^|[ _-]+|[\[(])(?:version|rev|draft|v)[ ._-]*([0-9]+(?:\.[0-9]+)*)[\])]?$`)
@@ -42,56 +40,32 @@ func duplicateFilenameParts(stem string) (name, version string, copyName bool) {
 
 func (s *session) describeDuplicates(plans []record, reason string) duplicateGroup {
 	g := duplicateGroup{Grouping: reason}
-	numbered := 0
-	versions := map[string]bool{}
-	distinct := true
 	for _, p := range plans {
-		item := s.manifest.Items[p.Index]
-		member := duplicateMember{Index: p.Index, Path: p.Path}
-		if item.Modified != 0 {
-			member.Modified = time.Unix(0, item.Modified)
-		}
-		stem := baseName(filepath.Base(p.Path))
-		_, member.Version, _ = duplicateFilenameParts(stem)
-		if member.Version != "" {
-			numbered++
-			versionKey := member.Version
-			for strings.HasSuffix(versionKey, ".0") {
-				versionKey = strings.TrimSuffix(versionKey, ".0")
-			}
-			if versions[versionKey] {
-				distinct = false
-			}
-			versions[versionKey] = true
-		}
-		g.Members = append(g.Members, member)
+		g.Members = append(g.Members, duplicateMember{Index: p.Index, Path: p.Path})
 	}
-	if reason == "Identical file contents" {
-		slices.SortFunc(g.Members, func(a, b duplicateMember) int { return strings.Compare(a.Path, b.Path) })
-		keeper := g.Members[0]
-		g.KeeperReason = "If every name looks like a copy, keep the first path alphabetically."
+	slices.SortFunc(g.Members, func(a, b duplicateMember) int { return strings.Compare(a.Path, b.Path) })
+	keeper := g.Members[0]
+	g.KeeperReason = "Every name has a copy suffix. This path comes first alphabetically."
+	for _, member := range g.Members {
+		_, _, copyName := duplicateFilenameParts(baseName(filepath.Base(member.Path)))
+		if !copyName {
+			keeper = member
+			g.KeeperReason = "Prefer a name without a copy suffix. Break ties by alphabetical path."
+			break
+		}
+	}
+	if reason == "Verified equivalent copies" {
 		for _, member := range g.Members {
-			_, _, copyName := duplicateFilenameParts(baseName(filepath.Base(member.Path)))
-			if !copyName {
+			stem, _, copyName := duplicateFilenameParts(baseName(filepath.Base(member.Path)))
+			author, year, title, venue := citationParts(stem)
+			if !copyName && author != "" && year != "" && meaningful(title) && meaningful(venue) {
 				keeper = member
-				g.KeeperReason = "Prefer a name without a copy suffix. Break ties by alphabetical path."
+				g.KeeperReason = "Its filename includes the author, year, title, and publication venue."
 				break
 			}
 		}
-		g.RecommendedKeeper = keeper.Index
-	} else {
-		switch {
-		case numbered == len(plans) && distinct:
-			g.VersionEvidence = "Order suggested by the version labels in the filenames. Compare contents to confirm the files are revisions."
-			slices.SortStableFunc(g.Members, func(a, b duplicateMember) int {
-				return compareVersionNumbers(a.Version, b.Version)
-			})
-		case numbered > 0:
-			g.VersionEvidence = "Some version labels are missing or repeated. Version order is uncertain."
-		default:
-			g.VersionEvidence = "Version order is uncertain. Modification times are shown for reference."
-		}
 	}
+	g.RecommendedKeeper = keeper.Index
 	for _, member := range g.Members {
 		g.Files = append(g.Files, member.Path)
 	}
@@ -180,6 +154,9 @@ func (a *application) compareDuplicateFiles(ctx context.Context, job string, fir
 	}
 	if left.Digest == right.Digest {
 		return duplicateComparison{"Exact duplicate", "The full-file SHA-256 hashes match.", "Keep one"}, nil
+	}
+	if left.EquivalentDigest != "" && left.EquivalentDigest == right.EquivalentDigest {
+		return duplicateComparison{"Verified equivalent copies", equivalenceFinding(left.EquivalentDigest), "Keep one"}, nil
 	}
 	ltext, lfull, err := comparisonText(ctx, root, rootPath, left, lst)
 	if err != nil {
@@ -299,12 +276,24 @@ func (a *application) recycleMatchedCopies(ctx context.Context, job string, revi
 }
 
 func (a *application) recycleDuplicateGroups(ctx context.Context, job string, revision uint64, groups []duplicateSelection, recycle func(string) error) (duplicateRecycleReceipt, error) {
+	return a.recycleApprovedCopies(ctx, job, revision, groups, false, recycle)
+}
+
+func (a *application) recycleApprovedCopies(ctx context.Context, job string, revision uint64, groups []duplicateSelection, equivalent bool, recycle func(string) error) (duplicateRecycleReceipt, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	var receipt duplicateRecycleReceipt
 	s := a.s
 	if s == nil || a.v.Job != job || a.v.Revision != revision || a.v.Busy || a.v.Closing || s.pending != nil || s.manifest.Operation != scanDuplicates || s.settings().Execution.Mode == "preview_only" || len(groups) == 0 {
-		return receipt, errors.New("Review exact duplicates in the current scan and choose the copies to recycle")
+		return receipt, errors.New("Open the current duplicate scan and choose the copies to recycle")
+	}
+	verified := make(map[int]int)
+	if equivalent {
+		for _, group := range s.duplicateResults().Verified {
+			for _, member := range group.Members {
+				verified[member.Index] = group.RecommendedKeeper
+			}
+		}
 	}
 	seen := make(map[int]bool)
 	for _, group := range groups {
@@ -314,8 +303,14 @@ func (a *application) recycleDuplicateGroups(ctx context.Context, job string, re
 		seen[group.Keep] = true
 		keeper := s.plans[group.Keep]
 		for _, index := range group.Indices {
-			if seen[index] || !s.liveDuplicate(index) || s.plans[index].Digest != keeper.Digest {
-				return receipt, errors.New("Each selected copy must occur once and be byte-identical to its keeper")
+			if seen[index] || !s.liveDuplicate(index) {
+				return receipt, errors.New("Each selected copy must occur once and be available")
+			}
+			if chosen, ok := verified[index]; equivalent && (!ok || chosen != group.Keep) {
+				return receipt, errors.New("Each selected copy must belong to the keeper's current verified recommendation")
+			}
+			if !equivalent && s.plans[index].Digest != keeper.Digest {
+				return receipt, errors.New("Each selected copy must be byte-identical to its keeper")
 			}
 			seen[index] = true
 		}
@@ -331,8 +326,16 @@ func (a *application) recycleDuplicateGroups(ctx context.Context, job string, re
 	defer root.Close()
 	for _, group := range groups {
 		for _, index := range append([]int{group.Keep}, group.Indices...) {
-			if _, err := recheckDuplicate(ctx, root, s.manifest.Root, s.plans[index]); err != nil {
+			plan := s.plans[index]
+			st, err := recheckDuplicate(ctx, root, s.manifest.Root, plan)
+			if err != nil {
 				return receipt, fmt.Errorf("Nothing recycled. %s: %w", filepath.Base(s.plans[index].Path), err)
+			}
+			if equivalent {
+				relative, err := filepath.Rel(s.manifest.Root, plan.Path)
+				if err != nil || duplicateEquivalence(ctx, root, relative, st, plan.Digest) != plan.EquivalentDigest {
+					return receipt, fmt.Errorf("Nothing recycled. Equivalence could not be reverified for %s", filepath.Base(plan.Path))
+				}
 			}
 		}
 	}

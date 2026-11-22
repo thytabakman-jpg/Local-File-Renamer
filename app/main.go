@@ -450,13 +450,13 @@ func server(a *application) *http.Server {
 			}
 		case "apply-one":
 			err = a.applyOneRevision(q.ID, q.Index, q.Revision)
-		case "recycle-duplicates", "recycle-duplicate-groups":
+		case "recycle-duplicates", "recycle-duplicate-groups", "recycle-verified-duplicates":
 			if !recycleAvailable {
 				err = fmt.Errorf("The Windows Recycle Bin is unavailable")
 				break
 			}
 			if q.Revision == nil {
-				err = fmt.Errorf("Confirm exact copies from the current scan")
+				err = fmt.Errorf("Confirm copies from the current duplicate scan")
 				break
 			}
 			if q.Action == "recycle-duplicates" {
@@ -472,7 +472,7 @@ func server(a *application) *http.Server {
 				reply(w, map[string]int{"recycled": count})
 				return
 			}
-			receipt, recycleErr := a.recycleDuplicateGroups(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, recycleFile)
+			receipt, recycleErr := a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
 			message := ""
 			if recycleErr != nil {
 				message = recycleErr.Error()

@@ -20,7 +20,6 @@ let recommendationOutcome = "";
 function selectView(view) {
   currentView = view;
   if (view !== "review") {
-    stopDuplicateComparisons();
     resetRecommendations("");
     closeInlineName();
   }
@@ -31,10 +30,7 @@ function selectView(view) {
     el("chat-folder").textContent = folder ? "Selected scan folder: " + folder : "Choose a folder in New scan or give its full path here.";
     el("chat-input").focus();
   }
-  if (view === "review") {
-    updateReview(latest);
-    startDuplicateComparisons();
-  }
+  if (view === "review") updateReview(latest);
 }
 
 function leaf(path) { return path?.split(/[\\/]/).at(-1) || ""; }

@@ -150,10 +150,10 @@ func TestDuplicateCheckStaysReadOnlyAndSavesResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results.Exact) != 1 || len(results.Possible) != 1 || len(results.Exact[0].Files) != 2 || len(results.Possible[0].Files) != 2 {
+	if len(results.Exact) != 1 || results.Unresolved != 1 || len(results.Exact[0].Files) != 2 || len(results.Verified) != 0 {
 		t.Fatalf("Incorrect duplicate groups: %+v", results)
 	}
-	for _, group := range append(results.Exact, results.Possible...) {
+	for _, group := range results.Exact {
 		for _, path := range group.Files {
 			if !within(root, path) || path == outsideLink {
 				t.Fatalf("Duplicate check included an out-of-scope file: %s", path)
@@ -195,27 +195,22 @@ func TestDuplicateReviewCompareVersionsAndRecycleExactCopies(t *testing.T) {
 	}
 	state := waitForOperation(t, a)
 	results, err := a.scanResults(state.Job)
-	if err != nil || len(results.Exact) != 1 || len(results.Possible) != 2 {
+	if err != nil || len(results.Exact) != 1 || results.Unresolved != 2 || len(results.Verified) != 0 {
 		t.Fatalf("%+v %v", results, err)
 	}
 	exact := results.Exact[0].Members
-	var versions []duplicateMember
-	for _, g := range results.Possible {
-		if g.Grouping == "Similar filenames" {
-			versions = g.Members
-		}
-	}
-	if len(versions) != 3 || versions[0].Version != "1" || versions[1].Version != "2" || versions[2].Version != "10" {
-		t.Fatalf("version order: %+v", versions)
+	versions := make(map[string]int)
+	for _, plan := range a.s.plans {
+		versions[filepath.Base(plan.Path)] = plan.Index
 	}
 	ctx := context.Background()
-	if report, err := a.compareDuplicateFiles(ctx, state.Job, versions[0].Index, versions[1].Index); err != nil || report.Verdict != "Different complete text" || report.Recommendation != "Keep both as versions" {
+	if report, err := a.compareDuplicateFiles(ctx, state.Job, versions["Study v1.txt"], versions["Study v2.txt"]); err != nil || report.Verdict != "Different complete text" || report.Recommendation != "Keep both as versions" {
 		t.Fatalf("%+v: %v", report, err)
 	}
 	if report, err := a.compareDuplicateFiles(ctx, state.Job, exact[0].Index, exact[1].Index); err != nil || report.Verdict != "Exact duplicate" {
 		t.Fatalf("%+v: %v", report, err)
 	}
-	if _, err := a.recycleMatchedCopies(ctx, state.Job, state.Revision, exact[0].Index, []int{versions[0].Index}, os.Remove); err == nil {
+	if _, err := a.recycleMatchedCopies(ctx, state.Job, state.Revision, exact[0].Index, []int{versions["Study v1.txt"]}, os.Remove); err == nil {
 		t.Fatal("allowed recycling a non-identical file")
 	}
 	count, err := a.recycleMatchedCopies(ctx, state.Job, state.Revision, exact[0].Index, []int{exact[1].Index}, os.Remove)
@@ -325,17 +320,32 @@ func TestDuplicateBatchPreflightsEveryGroupAndRecordsPartialResults(t *testing.T
 	}
 }
 
-func TestDuplicateRecommendationUsesCompleteTextAndSharedVersionLabels(t *testing.T) {
+func TestVerifiedDuplicateRecommendationsAndApproval(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
-	common := strings.Repeat("The opening summary describes all results before the final decision.\n", 3000)
+	ctx := context.Background()
+	content := "BT /F1 12 Tf 72 700 Td (A complete page of identical journal article content.) Tj ET\n"
+	info := func(date string) string {
+		return "<< /Title (Trees and Rivers) /CreationDate (D:" + date + "000000Z) >>"
+	}
+	pdfKeeper := filepath.Join(root, "Smith - 2023 - Trees and Rivers - Botany Journal.pdf")
+	pdfCopy := filepath.Join(root, "Trees and Rivers (1).pdf")
+	pdfThird := filepath.Join(root, "Trees and Rivers (2).pdf")
+	pages := []string{content, content, content}
+	writeTestPDFPages(t, pdfKeeper, pages, info("20260101"), "")
+	writeTestPDFPages(t, pdfCopy, pages, info("20260102"), "")
+	writeTestPDFPages(t, pdfThird, pages, info("20260103"), "")
+	distinct := filepath.Join(root, "Trees and Rivers (3).pdf")
+	revised := []string{content, content, strings.Replace(content, "identical", "different", 1)}
+	writeTestPDFPages(t, distinct, revised, info("20260103"), "")
+	differentMetadata := filepath.Join(root, "Trees and Rivers (4).pdf")
+	writeTestPDFPages(t, differentMetadata, pages, strings.Replace(info("20260103"), "Trees and Rivers", "Other metadata", 1), "")
+	annotated := filepath.Join(root, "Trees and Rivers (5).pdf")
+	writeTestPDFPages(t, annotated, pages, info("20260103"), "/Annots [ << /Type /Annot /Subtype /Text /Rect [72 720 92 740] /Contents (Keep my reading notes) >> ]")
 	for name, body := range map[string]string{
-		"Study [v1].txt":  common + "The treatment was effective.\n",
-		"Study [v2].txt":  common + "The treatment was ineffective.\n",
-		"Study [v10].txt": common + "The treatment was withdrawn.\n",
-		"Notes.txt":       "Some meaningful text\n", "Notes copy.txt": "Some meaningful text\r\n",
-		"Report.txt":      "Our astronomy telescope measured orbital speeds and stellar distances.",
-		"Report copy.txt": "This recipe combines potatoes, carrots, butter and herbs.",
-		"Record.bin":      "\x00first", "Record copy.bin": "\x00second",
+		"Notes.txt":      "Some meaningful text\n",
+		"Notes copy.txt": "Some meaningful text\r\n",
+		"Study v1.md":    "An identical opening.\nThe earlier results differ.\n",
+		"Study v2.md":    "An identical opening.\nThe revised results differ.\n",
 	} {
 		writeScanFile(t, filepath.Join(root, name), body)
 	}
@@ -348,30 +358,59 @@ func TestDuplicateRecommendationUsesCompleteTextAndSharedVersionLabels(t *testin
 		t.Fatal(err)
 	}
 	state := waitForOperation(t, a)
-	results, err := a.scanResults(state.Job)
-	if err != nil {
+	if err := a.selectJob(state.Job); err != nil {
 		t.Fatal(err)
 	}
-	recommendations := map[string]string{}
-	for _, group := range results.Possible {
-		first, second := group.Members[0], group.Members[1]
-		report, err := a.compareDuplicateFiles(context.Background(), state.Job, first.Index, second.Index)
-		if err != nil {
-			t.Fatal(err)
+	state = a.snapshot()
+	results, err := a.scanResults(state.Job)
+	if err != nil || len(results.Exact) != 0 || len(results.Verified) != 2 || results.Unresolved < 2 {
+		t.Fatalf("%+v %v", results, err)
+	}
+	var selections []duplicateSelection
+	var pdfSelection duplicateSelection
+	for _, group := range results.Verified {
+		var sel duplicateSelection
+		sel.Keep = group.RecommendedKeeper
+		for _, member := range group.Members {
+			if member.Index != sel.Keep {
+				sel.Indices = append(sel.Indices, member.Index)
+			}
 		}
-		key, _, _ := duplicateFilenameParts(baseName(filepath.Base(first.Path)))
-		recommendations[key] = report.Recommendation
-		if key == "Study" && (report.Verdict != "Different complete text" || len(group.Members) != 3 ||
-			first.Version != "1" || second.Version != "2" || group.Members[2].Version != "10") {
-			t.Fatalf("version comparison: %+v, %+v", group, report)
+		if group.Finding == pdfDateDifference {
+			pdfSelection = sel
+			if a.s.plans[sel.Keep].Path != pdfKeeper || len(sel.Indices) != 2 {
+				t.Fatalf("incorrect PDF recommendation: %+v", group)
+			}
+		}
+		selections = append(selections, sel)
+	}
+	if len(pdfSelection.Indices) != 2 {
+		t.Fatal("no PDF cleanup recommendation")
+	}
+	for _, plan := range a.s.plans {
+		if plan.Path == distinct {
+			wrong := []duplicateSelection{{Keep: pdfSelection.Keep, Indices: []int{plan.Index}}}
+			if _, err := a.recycleApprovedCopies(ctx, state.Job, state.Revision, wrong, true, os.Remove); err == nil {
+				t.Fatal("accepted a changed PDF as equivalent")
+			}
 		}
 	}
-	for key, want := range map[string]string{
-		"Study": "Keep both as versions", "Notes": "Keep one",
-		"Report": "Keep both as distinct files", "Record": "Needs your judgment",
-	} {
-		if got := recommendations[key]; got != want {
-			t.Errorf("%s recommendation = %q, want %q; all: %v", key, got, want, recommendations)
+	makeStale := filepath.Join(root, "Notes copy.txt")
+	writeScanFile(t, makeStale, "Some newer text\r\n")
+	if receipt, err := a.recycleApprovedCopies(ctx, state.Job, state.Revision, selections, true, os.Remove); err == nil || receipt.Recycled != 0 {
+		t.Fatalf("stale batch recycled files: %+v %v", receipt, err)
+	}
+	if receipt, err := a.recycleApprovedCopies(ctx, state.Job, state.Revision, []duplicateSelection{pdfSelection}, true, os.Remove); err != nil || receipt.Recycled != 2 {
+		t.Fatalf("approved PDF cleanup: %+v %v", receipt, err)
+	}
+	for _, file := range []string{pdfKeeper, distinct, makeStale, differentMetadata, annotated} {
+		if _, err := os.Stat(file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{pdfCopy, pdfThird} {
+		if _, err := os.Stat(file); !os.IsNotExist(err) {
+			t.Fatalf("extra remains: %v", err)
 		}
 	}
 }
