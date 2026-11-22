@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -17,6 +18,7 @@ type scanModel struct {
 	vision               bool
 	holdsSlot            bool
 	unavailable          [2]error
+	capture              completionCapture
 }
 
 func (m *scanModel) call(ctx context.Context, vision bool, run func(*localModel) error) error {
@@ -82,7 +84,16 @@ func (m *scanModel) handlers(partial bool) (assessFile, transcribePage) {
 		return nil, nil
 	}
 	return func(ctx context.Context, name string, e evidence) (a assessment, err error) {
-			err = m.call(ctx, len(e.Photo) != 0, func(model *localModel) error { a, err = model.assess(ctx, name, e); return err })
+			err = m.call(ctx, len(e.Photo) != 0, func(model *localModel) error {
+				assess := model.assess
+				if m.session.manifest.Operation == scanMove {
+					assess = model.assessTopic
+				}
+				m.capture.RecordEvidence = m.settings.AI.RecordEvidence
+				ctx = context.WithValue(ctx, captureKey{}, &m.capture)
+				a, err = assess(ctx, name, e)
+				return err
+			})
 			return a, err
 		}, func(ctx context.Context, image []byte) (text string, err error) {
 			before := m.startupMS
@@ -91,12 +102,25 @@ func (m *scanModel) handlers(partial bool) (assessFile, transcribePage) {
 			return text, err
 		}
 }
-func (m *scanModel) timings(i *inspection, partial bool) {
+func (m *scanModel) timings(i *inspection, partial bool, index int) {
 	if !partial {
 		i.Model, _, _ = modelProfileFor(m.settings.AI.Model)
 	}
 	i.StartupMS = m.startupMS
 	i.OCRMS = max(0, i.OCRMS-m.ocrLoadMS)
 	i.ModelMS = max(0, i.ModelMS-(m.startupMS-m.ocrLoadMS))
+	i.PromptMS, i.GenerationMS = m.capture.PromptMS, m.capture.GenerationMS
+	if len(m.capture.Attempts) != 0 {
+		path := modelTracePath(m.session.dir, index)
+		err := os.MkdirAll(filepath.Dir(path), 0700)
+		if err == nil {
+			err = atomicJSON(path, m.capture)
+		}
+		i.ModelTrace = err == nil
+		if err != nil {
+			i.Detail = joinNote(i.Detail, "Could not save the local model evidence")
+		}
+	}
+	m.capture = completionCapture{}
 	m.startupMS, m.ocrLoadMS = 0, 0
 }

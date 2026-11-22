@@ -58,6 +58,7 @@ type diagnosticReport struct {
 	Job                                         string
 	Clock                                       scanClock
 	ReadMS, OCRMS, StartupMS, ModelMS, RenameMS int64
+	PromptMS, GenerationMS                      int64
 	Slowest                                     []timingRow
 	RecentIssues                                []timingRow
 	LastError                                   string
@@ -105,6 +106,8 @@ func (a *application) diagnostic(jobID string, includeNames bool) (diagnosticRep
 			report.ReadMS += r.Inspection.ReadMS
 			report.OCRMS += r.Inspection.OCRMS
 			report.ModelMS += r.Inspection.ModelMS
+			report.PromptMS += r.Inspection.PromptMS
+			report.GenerationMS += r.Inspection.GenerationMS
 			report.StartupMS += r.Inspection.StartupMS
 			row := timingRow{Index: r.Index, Path: r.Path, Status: planOutcome(r), Note: r.Note, Inspection: r.Inspection}
 			if r.Type == "scan-interrupted" {
@@ -164,6 +167,7 @@ func (a *application) diagnostic(jobID string, includeNames bool) (diagnosticRep
 				row.Path, row.Inspection.Detail = "", ""
 				row.Inspection.PublicationSource = ""
 				row.Inspection.Checklist = nil
+				row.Inspection.Location = nil
 				switch {
 				case row.Status == "Interrupted":
 					row.Note = "Inspection paused or interrupted"

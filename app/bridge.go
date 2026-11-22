@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -17,45 +18,51 @@ import (
 const bridgeURL = "http://127.0.0.1:39173/api/bridge"
 
 type bridgeCommand struct {
-	Action       string                     `json:"action"`
-	Operation    scanOperation              `json:"operation,omitempty"`
-	Job          string                     `json:"job,omitempty"`
-	IncludeNames bool                       `json:"include_names,omitempty"`
-	Root         string                     `json:"root,omitempty"`
-	Partial      bool                       `json:"without_ai,omitempty"`
-	Folders      *bool                      `json:"rename_folders,omitempty"`
-	Repair       *bool                      `json:"repair_metadata,omitempty"`
-	Sort         *bool                      `json:"suggest_moves,omitempty"`
-	Offset       int                        `json:"offset,omitempty"`
-	Index        *int                       `json:"index,omitempty"`
-	Indices      []int                      `json:"indices,omitempty"`
-	Revision     *uint64                    `json:"revision,omitempty"`
-	Rules        *namingRules               `json:"rules,omitempty"`
-	Name         *string                    `json:"filename,omitempty"`
-	Kind         string                     `json:"classification,omitempty"`
-	Group        string                     `json:"group,omitempty"`
-	Value        string                     `json:"value,omitempty"`
-	Refresh      bool                       `json:"refresh_assessment,omitempty"`
-	Resume       bool                       `json:"resume_saved_selection,omitempty"`
-	Profile      string                     `json:"profile,omitempty"`
-	Settings     *scanSettings              `json:"settings,omitempty"`
-	Activate     bool                       `json:"activate,omitempty"`
-	Authorized   bool                       `json:"authorized,omitempty"`
-	First        string                     `json:"first,omitempty"`
-	Second       string                     `json:"second,omitempty"`
-	Destination  string                     `json:"destination,omitempty"`
-	Fields       []string                   `json:"fields,omitempty"`
-	Changes      map[string]json.RawMessage `json:"changes,omitempty"`
-	Reset        bool                       `json:"reset,omitempty"`
-	ScopeMode    string                     `json:"scope_mode,omitempty"`
-	Extensions   []string                   `json:"include_extensions,omitempty"`
-	Subfolders   *bool                      `json:"subfolders,omitempty"`
-	Fresh        bool                       `json:"fresh,omitempty"`
-	MediaSamples *bool                      `json:"media_samples,omitempty"`
+	Action        string                     `json:"action"`
+	Operation     scanOperation              `json:"operation,omitempty"`
+	Job           string                     `json:"job,omitempty"`
+	IncludeNames  bool                       `json:"include_names,omitempty"`
+	Root          string                     `json:"root,omitempty"`
+	Partial       bool                       `json:"without_ai,omitempty"`
+	Folders       *bool                      `json:"rename_folders,omitempty"`
+	Repair        *bool                      `json:"repair_metadata,omitempty"`
+	Sort          *bool                      `json:"suggest_moves,omitempty"`
+	Filter        string                     `json:"filter,omitempty"`
+	Limit         int                        `json:"limit,omitempty"`
+	PlanID        string                     `json:"plan_id,omitempty"`
+	ClientVersion string                     `json:"client_version,omitempty"`
+	Offset        int                        `json:"offset,omitempty"`
+	Index         *int                       `json:"index,omitempty"`
+	Indices       []int                      `json:"indices,omitempty"`
+	Destinations  []moveDestinationOverride  `json:"destinations,omitempty"`
+	Revision      *uint64                    `json:"revision,omitempty"`
+	Rules         *namingRules               `json:"rules,omitempty"`
+	Name          *string                    `json:"filename,omitempty"`
+	Kind          string                     `json:"classification,omitempty"`
+	Group         string                     `json:"group,omitempty"`
+	Value         string                     `json:"value,omitempty"`
+	Refresh       bool                       `json:"refresh_assessment,omitempty"`
+	Resume        bool                       `json:"resume_saved_selection,omitempty"`
+	Profile       string                     `json:"profile,omitempty"`
+	Settings      *scanSettings              `json:"settings,omitempty"`
+	Activate      bool                       `json:"activate,omitempty"`
+	Authorized    bool                       `json:"authorized,omitempty"`
+	First         string                     `json:"first,omitempty"`
+	Second        string                     `json:"second,omitempty"`
+	Destination   string                     `json:"destination,omitempty"`
+	Fields        []string                   `json:"fields,omitempty"`
+	Changes       map[string]json.RawMessage `json:"changes,omitempty"`
+	Reset         bool                       `json:"reset,omitempty"`
+	ScopeMode     string                     `json:"scope_mode,omitempty"`
+	Extensions    []string                   `json:"include_extensions,omitempty"`
+	Subfolders    *bool                      `json:"subfolders,omitempty"`
+	Fresh         bool                       `json:"fresh,omitempty"`
+	MediaSamples  *bool                      `json:"media_samples,omitempty"`
 }
 
 const appVersion = "3.5"
-const bridgeVersion = 3
+const bridgeVersion = 4
+const bridgeResponseLimit = 512 << 10
 
 func bridgeKeyPath(home string) string { return filepath.Join(home, "desktop-connection.key") }
 
@@ -132,7 +139,8 @@ func (a *application) bridgeAction(cmd bridgeCommand) (any, error) {
 		for _, tool := range bridgeTools {
 			names = append(names, tool["name"].(string))
 		}
-		response = map[string]any{"version": appVersion, "connection_api": bridgeVersion, "tools": names, "page_size": 100, "max_reassessment": 200}
+		response = map[string]any{"version": appVersion, "running_app_version": appVersion, "stdio_bridge_version": cmd.ClientVersion,
+			"connection_api": bridgeVersion, "tools": names, "page_size": 100, "max_reassessment": 200}
 	case "start":
 		if !filepath.IsAbs(cmd.Root) {
 			return nil, errors.New("Provide the full path of the folder to preview")
@@ -208,10 +216,7 @@ func (a *application) bridgeAction(cmd bridgeCommand) (any, error) {
 		}
 		err = a.saveProfile(revision(), cmd.Profile, nil, true)
 	case "scan_results":
-		if !cmd.IncludeNames {
-			return nil, errors.New("Confirm that the user asked for file and folder paths")
-		}
-		response, err = a.scanResults(cmd.Job)
+		response, err = a.bridgeResults(cmd)
 	case "proposals":
 		response, err = a.proposalPage(cmd.Job, max(0, cmd.Offset))
 	case "inspections":
@@ -260,10 +265,19 @@ func (a *application) bridgeAction(cmd bridgeCommand) (any, error) {
 		}
 		err = a.reassess(cmd.Job, revision(), cmd.Indices, cmd.Group, cmd.Value, cmd.Refresh)
 	case "apply":
+		if cmd.PlanID != "" {
+			if !cmd.Authorized || cmd.Revision == nil || len(cmd.Indices) != 0 || len(cmd.Destinations) != 0 || cmd.Resume {
+				return nil, errors.New("Apply the exact duplicate plan only with explicit authorization, its original revision, and no other selection")
+			}
+			if !recycleAvailable {
+				return nil, errors.New("The Windows Recycle Bin is unavailable")
+			}
+			return a.applyExactBatch(context.Background(), cmd.Job, cmd.PlanID, revision(), recycleFile)
+		}
 		if !cmd.Authorized || cmd.Revision == nil {
 			return nil, errors.New("Apply requires an authorized selection and the current proposal revision")
 		}
-		err = a.applySelected(cmd.Job, revision(), cmd.Indices, cmd.Resume)
+		return a.bridgeApplySelection(cmd.Job, revision(), cmd.Indices, cmd.Resume, cmd.Destinations)
 	case "undo":
 		if !cmd.Authorized {
 			return nil, errors.New("Undo requires authorization for the specified run")
@@ -317,13 +331,13 @@ func bridgeToolList() []map[string]any {
 		"prefer_specific_title": flag, "spelling": map[string]any{"type": "object", "additionalProperties": str}},
 		"normalize_spacing", "replace_underscores", "normalize_uppercase", "prefer_specific_title")
 	return []map[string]any{
-		bridgeTool("status", "Read compact counts and outcome for the active or a saved run, without filenames.", map[string]any{"job": str}),
-		bridgeTool("capabilities", "Check the live app version, connection API, tools and supported limits.", nil),
+		bridgeTool("status", "Read the compact operation receipt by job ID. A completed duplicate scan can include its exact-copy approval plan.", map[string]any{"job": str}),
+		bridgeTool("capabilities", "Check the STDIO bridge version and the running Windows app version separately.", nil),
 		bridgeTool("diagnostics", "Read timing and recent issues for a selected or saved run. Set include_names only when the user requests per-file detail.", map[string]any{"job": str, "include_names": flag}),
 		bridgeTool("pause", "Pause the active scan.", nil),
 		bridgeTool("resume", "Resume the paused scan using its saved settings.", nil),
 		bridgeTool("start", "Start a scan of a user-selected local folder. Select operation rename, move, or duplicates. without_ai disables local inference.", map[string]any{"root": str, "operation": map[string]any{"type": "string", "enum": []scanOperation{scanRename, scanMove, scanDuplicates}}, "without_ai": flag, "rename_folders": flag, "repair_metadata": flag, "suggest_moves": flag, "media_samples": flag, "profile": str, "authorized": flag, "include_extensions": map[string]any{"type": "array", "items": str}, "scope_mode": map[string]any{"type": "string", "enum": []string{"all", "selected", "profile"}}, "subfolders": flag, "fresh": flag, "changes": map[string]string{"type": "object"}}, "root"),
-		bridgeTool("scan_results", "Read the folder tree or duplicate groups for the selected File Mover or Duplicate Check run. Set include_names only when the user requests file and folder paths.", map[string]any{"job": str, "include_names": flag}, "job", "include_names"),
+		bridgeTool("scan_results", "Read filtered Move or Duplicate Check rows by job. Pass NextOffset and Revision for the next page. Set include_names only when the user requests paths.", map[string]any{"job": str, "include_names": flag, "offset": integer, "revision": integer, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "filter": map[string]any{"type": "string", "enum": bridgeResultFilters}}, "job"),
 		bridgeTool("proposals", "Read a page of proposals including paths, scan indices and draft markers. Pass NextOffset for the next page. Re-read the revision before applying.", map[string]any{"job": str, "offset": integer}),
 		bridgeTool("inspections", "Read a page of per-file naming evidence summaries and timings, with paths but no excerpts or image data.", map[string]any{"job": str, "include_names": flag, "offset": integer}, "include_names"),
 		bridgeTool("report", "Read compact counts, classifications, decisions and timings for the selected run.", map[string]any{"job": str, "include_names": flag}),
@@ -337,7 +351,8 @@ func bridgeToolList() []map[string]any {
 		bridgeTool("correct", "Correct a classification or a proposed basename in an assessed, unapplied item. A classification-only correction clears the proposal until reassessment.", map[string]any{"job": str, "revision": integer, "index": integer, "classification": map[string]any{"type": "string", "enum": classifications}, "filename": str}, "job", "revision", "index"),
 		bridgeTool("change_location", "Revise a file’s proposed destination inside the scan root. An empty destination keeps the current folder. This edits the proposal only.", map[string]any{"job": str, "revision": integer, "index": integer, "destination": str}, "job", "revision", "index"),
 		bridgeTool("reassess", "Use cached evidence for assessed file indices, or a group keyed by classification, extension or decision. refresh_assessment requests fresh inference if needed.", map[string]any{"job": str, "revision": integer, "indices": indices, "group": map[string]any{"type": "string", "enum": []string{"classification", "extension", "decision"}}, "value": str, "refresh_assessment": flag}, "job", "revision"),
-		bridgeTool("apply", "Apply the exact indices the user authorised, leaving other items unmodified. For an interrupted apply, use resume_saved_selection with no indices. Set authorized only with the user's authorization.", map[string]any{"job": str, "revision": integer, "indices": indices, "resume_saved_selection": flag, "authorized": flag}, "job", "revision", "authorized"),
+		bridgeTool("apply", "Apply authorised indices, optionally overriding Move destinations, or apply an explicitly approved exact duplicate plan_id. Retry that plan with its original revision. Use resume_saved_selection for a saved move or rename selection.", map[string]any{"job": str, "revision": integer, "indices": indices, "plan_id": str, "destinations": map[string]any{"type": "array",
+			"items": toolSchema(map[string]any{"index": integer, "destination": str}, "index", "destination")}, "resume_saved_selection": flag, "authorized": flag}, "job", "revision", "authorized"),
 		bridgeTool("undo", "Undo applied changes for the specified run. Set authorized only with the user's authorization.", map[string]any{"job": str, "authorized": flag}, "job", "authorized"),
 	}
 }
@@ -390,7 +405,11 @@ func runMCP(home string, input io.Reader, output io.Writer) {
 					}
 				}
 				if known {
+					p.Arguments.ClientVersion = appVersion
 					data, err = callBridge(home, p.Arguments)
+					if err == nil && p.Arguments.Action == "capabilities" {
+						data, err = bridgeVersionDetails(data)
+					}
 				} else {
 					err = errors.New("Unknown renamer tool")
 				}
@@ -408,6 +427,19 @@ func runMCP(home string, input io.Reader, output io.Writer) {
 	}
 }
 
+func bridgeVersionDetails(data string) (string, error) {
+	var versions map[string]any
+	if err := json.Unmarshal([]byte(data), &versions); err != nil || versions == nil {
+		return "", errors.New("Renamer returned invalid capability details")
+	}
+	versions["stdio_bridge_version"] = appVersion
+	if _, ok := versions["running_app_version"]; !ok {
+		versions["running_app_version"] = versions["version"]
+	}
+	result, err := json.Marshal(versions)
+	return string(result), err
+}
+
 func callBridge(home string, cmd bridgeCommand) (string, error) {
 	key, err := os.ReadFile(bridgeKeyPath(home))
 	if err != nil || len(key) != 48 {
@@ -423,74 +455,32 @@ func callBridge(home string, cmd bridgeCommand) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+string(key))
-	client := http.Client{Transport: loopbackTransport, Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	timeout := 12 * time.Second
+	if cmd.Action == "apply" {
+		timeout = 5 * time.Minute
+	}
+	client := http.Client{Transport: loopbackTransport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", errors.New("Local File Renamer is unavailable. Open the app and enable the connection.")
+		return "", errors.New("Local File Renamer did not respond. Check the job status before retrying. For exact duplicates, retry with the same plan and revision.")
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
+	return readBridgeResponse(resp.StatusCode, resp.Body)
+}
+
+func readBridgeResponse(status int, body io.Reader) (string, error) {
+	b, err := io.ReadAll(io.LimitReader(body, bridgeResponseLimit+1))
 	if err != nil {
 		return "", err
 	}
-	if resp.StatusCode != http.StatusOK {
+	if len(b) > bridgeResponseLimit {
+		return "", errors.New("Renamer response exceeds the bridge limit. Request a filtered or smaller page.")
+	}
+	if status != http.StatusOK {
 		return "", errors.New(strings.TrimSpace(string(b)))
 	}
+	if !json.Valid(b) {
+		return "", errors.New("Renamer returned incomplete or invalid JSON")
+	}
 	return string(b), nil
-}
-
-func (a *application) bridgeStatus(id string) (map[string]any, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	v := a.v
-	if (id == "" || id == v.StartJob) && v.StartJob != "" && (v.StartingRoot != "" || v.StartError != "") {
-		out := map[string]any{"Job": v.StartJob, "Phase": "indexing", "Root": v.StartingRoot, "Filter": v.StartingScope, "Mode": v.StartingMode, "Busy": v.Busy}
-		if v.StartError != "" {
-			out["Phase"], out["Reason"] = "start-failed", v.StartError
-		}
-		return out, nil
-	}
-	s := a.s
-	phase := v.Phase
-	active := id == "" || id == v.Job
-	if !active {
-		s = nil
-		for _, j := range v.Jobs {
-			if j.ID == id {
-				var err error
-				s, err = openSessionReadOnly(filepath.Join(a.home, "runs", id))
-				if err != nil {
-					return nil, err
-				}
-				defer s.close()
-				phase = "complete"
-				if s.applyPending() {
-					phase = "apply-paused"
-				} else if len(s.plans) < len(s.manifest.Items) {
-					phase = "paused"
-				} else if s.reviewCount() > 0 {
-					phase = "preview"
-				}
-				break
-			}
-		}
-		if s == nil {
-			return nil, errors.New("No saved run with that ID")
-		}
-	}
-	if s == nil {
-		return map[string]any{"Phase": phase, "Busy": v.Busy}, nil
-	}
-	receipt := s.receipt()
-	matched := s.fileCount
-	if s.manifest.Inventory != nil {
-		matched = s.manifest.Inventory.Included
-	}
-	pending := s.reviewCount()
-	reason := s.zeroChangeReason(active && v.Busy, pending)
-	opts := s.settings()
-	return map[string]any{"Job": filepath.Base(s.dir), "Root": s.manifest.Root, "Phase": phase, "Operation": s.manifest.Operation,
-		"Filter": opts.Scope.description(), "Mode": opts.Execution.Mode, "Busy": active && v.Busy, "Partial": s.partial,
-		"Matched": matched, "Assessed": s.filesAssessed, "Proposed": pending + receipt.Renames.Completed,
-		"Pending": pending, "Applied": receipt.Renames.Completed, "Failed": receipt.Renames.Failed + receipt.Assessments.Failed, "Reason": reason, "AvailableTypes": s.availableTypes(), "Folders": len(s.manifest.Items) - s.fileCount, "Skipped": s.filesSkipped, "Verified": s.filesVerified}, nil
 }

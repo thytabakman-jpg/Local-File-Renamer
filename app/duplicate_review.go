@@ -282,11 +282,16 @@ func (a *application) recycleDuplicateGroups(ctx context.Context, job string, re
 func (a *application) recycleApprovedCopies(ctx context.Context, job string, revision uint64, groups []duplicateSelection, equivalent bool, recycle func(string) error) (duplicateRecycleReceipt, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	var receipt duplicateRecycleReceipt
 	s := a.s
 	if s == nil || a.v.Job != job || a.v.Revision != revision || a.v.Busy || a.v.Closing || s.pending != nil || s.manifest.Operation != scanDuplicates || s.settings().Execution.Mode == "preview_only" || len(groups) == 0 {
-		return receipt, errors.New("Open the current duplicate scan and choose the copies to recycle")
+		return duplicateRecycleReceipt{}, errors.New("Open the current duplicate scan and choose the copies to recycle")
 	}
+	defer a.syncSession(true)
+	return s.recycleCopies(ctx, groups, equivalent, "", recycle)
+}
+
+func (s *session) recycleCopies(ctx context.Context, groups []duplicateSelection, equivalent bool, batchID string, recycle func(string) error) (duplicateRecycleReceipt, error) {
+	var receipt duplicateRecycleReceipt
 	verified := make(map[int]int)
 	if equivalent {
 		for _, group := range s.duplicateResults().Verified {
@@ -339,7 +344,6 @@ func (a *application) recycleApprovedCopies(ctx context.Context, job string, rev
 			}
 		}
 	}
-	defer a.syncSession(true)
 	for i, group := range groups {
 		keeper := s.plans[group.Keep]
 		keptStamp, err := recheckDuplicate(ctx, root, s.manifest.Root, keeper)
@@ -359,7 +363,7 @@ func (a *application) recycleApprovedCopies(ctx context.Context, job string, rev
 			if err != nil || currentKept != keptStamp || safeParent(s.manifest.Root, keeper.Path) != nil {
 				return receipt, errors.New("The copy selected to keep is no longer available")
 			}
-			if err := s.append(record{Type: "recycle-intent", Index: index, Path: plan.Path, Stamp: proof}); err != nil {
+			if err := s.append(record{Type: "recycle-intent", Index: index, Path: plan.Path, Stamp: proof, BatchID: batchID}); err != nil {
 				return receipt, err
 			}
 			recycleErr := recycle(plan.Path)

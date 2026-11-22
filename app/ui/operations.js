@@ -61,6 +61,7 @@ async function updateOperationReview(state) {
       selectedFolder = (moveFolders.find(folder => folder.Path === selectedFolder) ||
         moveFolders.find(folder => folder.Proposals?.length) || moveFolders[0])?.Path || "";
       drawMoveReview();
+      if (el("kept-locations").open) loadKeptLocations(state, 0);
       const count = moveFolders.reduce((total, folder) => total + (folder.Proposals?.length || 0), 0);
       el("operation-status").textContent = summary + (count ? count + " proposed moves" : state.OutcomeReason || "No proposed moves remain") + (state.PreviewOnly ? " · Preview only" : "");
     } else {
@@ -84,6 +85,31 @@ async function updateOperationReview(state) {
     show("duplicate-results", false);
     el("operation-status").textContent = "Could not load scan results. " + error.message;
     show("retry-operation-results", true);
+  }
+}
+
+el("kept-locations").ontoggle = () => {
+  if (el("kept-locations").open && latest.Operation === "move" && !latest.Busy) loadKeptLocations(latest, 0);
+};
+
+async function loadKeptLocations(state, offset) {
+  const query = new URLSearchParams({job: state.Job, revision: state.Revision, offset});
+  try {
+    const response = await fetch("/api/kept-locations?" + query, {cache: "no-store"});
+    if (!response.ok) throw new Error((await response.text()).trim());
+    const page = await response.json();
+    if (latest.Job !== state.Job || latest.Revision !== state.Revision) return;
+    el("kept-location-rows").replaceChildren(...page.Rows.map(row => {
+      const item = document.createElement("li");
+      item.textContent = leaf(row.Path) + " · " + parentFolder(row.Path) + " · " + row.Reason;
+      return item;
+    }));
+    el("kept-location-status").textContent = page.Total ? (offset + 1) + "–" + (offset + page.Rows.length) + " of " + page.Total : "No files were kept in place.";
+    const next = el("kept-location-next");
+    show("kept-location-next", Boolean(page.NextOffset));
+    next.onclick = () => loadKeptLocations(state, page.NextOffset);
+  } catch (error) {
+    if (latest.Job === state.Job && latest.Revision === state.Revision) el("kept-location-status").textContent = error.message;
   }
 }
 

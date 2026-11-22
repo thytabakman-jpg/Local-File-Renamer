@@ -47,6 +47,31 @@ func oneOfFirstLines(value, text string) bool {
 	return false
 }
 
+func titleInFirstLines(title, text string) bool {
+	if !meaningful(title) || len(title) > 500 {
+		return false
+	}
+	lines := textLines(chars(text, 2800))
+	lines = lines[:min(len(lines), 12)]
+	expected := norm(title)
+	for i := range lines {
+		var joined string
+		for _, line := range lines[i:min(len(lines), i+4)] {
+			if joined != "" && titleHeading.MatchString(strings.TrimSpace(line)) {
+				break
+			}
+			joined = strings.TrimSpace(joined + " " + norm(line))
+			if joined == expected {
+				return true
+			}
+			if !strings.HasPrefix(expected, joined+" ") {
+				break
+			}
+		}
+	}
+	return false
+}
+
 func suggestMetadata(name string, e evidence, a assessment) *metadataEdit {
 	switch strings.ToLower(extension(name)) {
 	case ".pdf", ".docx", ".docm":

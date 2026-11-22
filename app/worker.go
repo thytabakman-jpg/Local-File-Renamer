@@ -22,6 +22,10 @@ type inspection struct {
 	ReadMS, OCRMS, StartupMS, ModelMS, TotalMS int64
 	Checklist                                  []classificationCheck `json:",omitempty"`
 	OnlineMS                                   int64                 `json:",omitempty"`
+	Location                                   *locationEvidence     `json:",omitempty"`
+	PromptMS                                   int64                 `json:",omitempty"`
+	GenerationMS                               int64                 `json:",omitempty"`
+	ModelTrace                                 bool                  `json:",omitempty"`
 }
 
 func localAIIssue(err error) (status, note string) {
@@ -125,7 +129,11 @@ func suggest(ctx context.Context, s *session, m *localModel, i int) (decision, s
 	if m == nil {
 		return inspect(ctx, s, nil, nil, i)
 	}
-	return inspect(ctx, s, m.assess, m.transcribe, i)
+	assess := m.assess
+	if s.manifest.Operation == scanMove {
+		assess = m.assessTopic
+	}
+	return inspect(ctx, s, assess, m.transcribe, i)
 }
 
 func inspect(ctx context.Context, s *session, assess assessFile, transcribe transcribePage, i int) (result decision, original stamp, failure error) {
@@ -146,7 +154,7 @@ type preparedEvidence struct {
 
 func prepareEvidence(ctx context.Context, path, name, cacheName string, st stamp, vision bool, opts scanSettings) preparedEvidence {
 	if opts.Cache.ReuseEvidence {
-		if c, ok := readCache(cacheName, st); ok && c.EvidenceConfig == opts.Evidence && c.DecodeMemory == opts.Resources.DecodeMemoryMiB &&
+		if c, ok := readCache(cacheName, st); ok && localEvidenceSettings(c.EvidenceConfig) == localEvidenceSettings(opts.Evidence) && c.DecodeMemory == opts.Resources.DecodeMemoryMiB &&
 			(c.OCRModel == "" || c.OCRModel == modelCacheKey(opts.AI.Model) && c.AIConfig == opts.AI) {
 			return preparedEvidence{Evidence: c.Evidence, Stamp: st, Cached: c, Reused: true}
 		}
@@ -226,6 +234,9 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		}
 	}
 
+	if s.manifest.Operation == scanMove {
+		return inspectLocation(ctx, s, assess, opts, item.Path, name, cacheName, *pre, e, ocrStatus, ocrMS, ocrErr, refresh), st, ctx.Err()
+	}
 	if isMedia(name) {
 		if opts.Evidence.MediaSamples && assess != nil {
 			return inspectSampledMedia(ctx, item.Path, name, cacheName, st, e, readMS, assess, opts, refresh), st, ctx.Err()
@@ -280,13 +291,9 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		}
 	}
 	if cacheName != "" && opts.Cache.ReuseEvidence && ctx.Err() == nil && ocrErr == nil && (!reused || used && check.Cache != "Assessment reused") {
-		cached := assessmentCache{Stamp: st, EvidenceVersion: evidenceVersion, Evidence: e, OCR: ocrStatus,
-			EvidenceConfig: opts.Evidence, DecodeMemory: opts.Resources.DecodeMemoryMiB, AIConfig: opts.AI}
-		if ocrStatus == "Read sampled pages" {
-			cached.OCRModel = modelCacheKey(opts.AI.Model)
-		}
+		cached := evidenceCache(*pre, e, ocrStatus, opts)
 		if used && opts.Cache.ReuseAssessment {
-			cached.Model, cached.AssessmentVersion, cached.Kind, cached.Rules = &a, assessmentVersion, modelCacheKey(opts.AI.Model), rules
+			cached.Model, cached.AssessmentVersion, cached.Kind, cached.Rules, cached.AIConfig = &a, assessmentVersion, modelCacheKey(opts.AI.Model), rules, opts.AI
 		}
 		_ = atomicJSON(cacheName, cached)
 	}
@@ -381,20 +388,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 	check.Checklist = d.Checklist
 	d.Inspection = check
 	destination, sortNote := s.sortIndex.suggest(item.Path, e, a, used)
-	d.Folder = destination
-	if s.manifest.Operation == scanMove {
-		d.Reason = sortNote
-		if destination == "" {
-			d.Folder = s.sortIndex.suggestNewFolder(item.Path, e, a, used)
-			d.NewFolder = d.Folder != ""
-			if d.NewFolder {
-				d.Reason = "The files share a topic and no existing folder clearly fits"
-			}
-		}
-		d.Note = ""
-	} else {
-		d.Note = joinNote(d.Note, sortNote)
-	}
+	d.Folder, d.Note = destination, joinNote(d.Note, sortNote)
 	if s.manifest.RepairMetadata {
 		d.Metadata = suggestMetadata(name, e, a)
 		if d.Metadata != nil && d.Metadata.Title != "" {

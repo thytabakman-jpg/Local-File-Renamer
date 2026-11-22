@@ -27,6 +27,32 @@ type assessmentCache struct {
 	AIConfig                           aiSettings
 	DecodeMemory                       int
 	OCRModel                           string
+	Move                               *cachedMoveTopic `json:",omitempty"`
+}
+
+type cachedMoveTopic struct {
+	Version, ModelKey string
+	AI                aiSettings
+	Assessment        assessment
+}
+
+const moveTopicVersion = "1"
+
+func localEvidenceSettings(config evidenceSettings) evidenceSettings {
+	config.OnlineDates = ""
+	return config
+}
+
+func evidenceCache(pre preparedEvidence, e evidence, ocr string, opts scanSettings) assessmentCache {
+	if pre.Reused {
+		return pre.Cached
+	}
+	cached := assessmentCache{Stamp: pre.Stamp, EvidenceVersion: evidenceVersion, Evidence: e, OCR: ocr,
+		EvidenceConfig: opts.Evidence, DecodeMemory: opts.Resources.DecodeMemoryMiB, AIConfig: opts.AI}
+	if ocr == "Read sampled pages" {
+		cached.OCRModel = modelCacheKey(opts.AI.Model)
+	}
+	return cached
 }
 
 func cachePath(dir, path string, vision bool) string {

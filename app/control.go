@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 type batchReport struct {
@@ -15,6 +16,7 @@ type batchReport struct {
 	Decisions, Classifications                  map[string]int
 	AI                                          map[string]int
 	ReadMS, OCRMS, StartupMS, ModelMS, RenameMS int64
+	PromptMS, GenerationMS                      int64
 	Clock                                       scanClock
 	AIContribution                              map[string]int
 	Receipt                                     completionReceipt
@@ -29,7 +31,7 @@ func (a *application) report(id string) (batchReport, error) {
 	}
 	report := batchReport{
 		Job: a.v.Job, Phase: a.v.Phase, Revision: s.planRevision, Total: s.fileCount,
-		Drafts: len(a.cleanup) - a.cleanupThrough, Clock: a.v.Clock,
+		Drafts: len(a.cleanup) - a.cleanupThrough, Clock: a.v.Clock.at(time.Now()),
 		Decisions: make(map[string]int), Classifications: make(map[string]int), AI: make(map[string]int), AIContribution: make(map[string]int), Receipt: s.receipt(),
 	}
 	for _, plan := range s.plans[:min(s.fileCount, len(s.plans))] {
@@ -52,6 +54,8 @@ func (a *application) report(id string) (batchReport, error) {
 		report.OCRMS += check.OCRMS
 		report.StartupMS += check.StartupMS
 		report.ModelMS += check.ModelMS
+		report.PromptMS += check.PromptMS
+		report.GenerationMS += check.GenerationMS
 		report.RenameMS += s.outcomes[plan.Index].RenameMS
 	}
 	return report, nil
@@ -254,7 +258,7 @@ func (a *application) reassess(id string, revision uint64, indexes []int, group,
 			a.v.Current = prior.Path
 			a.mu.Unlock()
 			d, st, err := inspectFile(ctx, s, assess, transcribe, i, prior.OverrideKind, refresh, opts)
-			engine.timings(&d.Inspection, partial)
+			engine.timings(&d.Inspection, partial, i)
 			if err != nil {
 				failure = err
 				break

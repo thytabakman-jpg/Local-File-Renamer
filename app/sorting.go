@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -17,12 +20,14 @@ type folderProfile struct {
 }
 
 type folderIndex struct {
-	root     string
-	folders  map[string]*folderProfile
-	children map[string][]string
-	nearby   map[string][]string
-	allPaths []string
-	topics   map[string]int
+	root         string
+	folders      map[string]*folderProfile
+	children     map[string][]string
+	nearby       map[string][]string
+	allPaths     []string
+	topics       map[string]int
+	topicLabels  map[string]string
+	topicAliases map[string]map[string]int
 }
 
 func topicWords(s string) []string {
@@ -163,21 +168,58 @@ func (p *folderProfile) score(words map[string]bool, excluded map[string]bool) i
 	return score
 }
 
+type folderMatch struct {
+	Path  string
+	Score int
+}
+
+type locationEvidence struct {
+	Current      folderMatch
+	Alternatives []folderMatch
+}
+
+type locationChoice struct {
+	Path, Reason string
+	Clear, New   bool
+	Evidence     *locationEvidence
+}
+
 func (f *folderIndex) suggest(path string, e evidence, a assessment, usedAI bool) (string, string) {
-	if f == nil || e.Note != "" {
+	choice := f.location(path, e, a, usedAI)
+	if choice.Path == "" && !strings.HasPrefix(choice.Reason, "File may not fit") {
 		return "", ""
 	}
-	words := topicFromEvidence(e, a, usedAI)
-	if f.allPaths != nil && len(words) < 2 {
-		words = topicWords(baseName(filepath.Base(path)))
-	}
-	if len(words) < 2 {
-		return "", ""
+	return choice.Path, choice.Reason
+}
+
+func (f *folderIndex) location(path string, e evidence, a assessment, usedAI bool) locationChoice {
+	choice := locationChoice{Reason: "The file evidence did not identify a matching folder"}
+	if f == nil {
+		return choice
 	}
 	dir := filepath.Dir(path)
+	if f.allPaths != nil {
+		choice.Evidence = &locationEvidence{Current: folderMatch{Path: dir}}
+	}
+	if e.Note != "" && f.allPaths == nil {
+		return choice
+	}
+	filename := baseName(filepath.Base(path))
+	words := topicFromEvidence(e, a, usedAI)
+	if f.allPaths != nil {
+		for _, word := range topicWords(filename) {
+			if !slices.Contains(words, word) {
+				words = append(words, word)
+			}
+		}
+	}
+	if len(words) < 2 {
+		choice.Reason = "The filename and document sample supplied fewer than two usable topic words"
+		return choice
+	}
 	current := f.folders[dir]
 	own := make(map[string]bool)
-	for _, word := range topicWords(baseName(filepath.Base(path))) {
+	for _, word := range topicWords(filename) {
 		own[word] = true
 	}
 	shared := make(map[string]bool, len(words))
@@ -185,31 +227,69 @@ func (f *folderIndex) suggest(path string, e evidence, a assessment, usedAI bool
 		shared[word] = true
 	}
 	keep := current.score(shared, own)
-	var best string
-	bestScore, second := 0, 0
+	var best, second folderMatch
 	for _, candidate := range f.candidates(dir) {
 		if samePath(candidate, dir) {
 			continue
 		}
-		score := f.folders[candidate].score(shared, nil)
-		if score > bestScore {
-			best, bestScore, second = candidate, score, bestScore
-		} else if score > second {
-			second = score
+		match := folderMatch{candidate, f.folders[candidate].score(shared, nil)}
+		if best.Path == "" || match.Score > best.Score {
+			second, best = best, match
+		} else if second.Path == "" || match.Score > second.Score {
+			second = match
 		}
 	}
-	if bestScore >= 5 && bestScore >= keep+2 && bestScore >= second+2 {
-		if rel, err := filepath.Rel(f.root, best); err == nil {
-			if rel == "." {
-				return best, "Contents match the selected folder better than the current subfolder"
+	if choice.Evidence != nil {
+		choice.Evidence.Current.Score = keep
+		for _, match := range []folderMatch{best, second} {
+			if match.Path != "" {
+				choice.Evidence.Alternatives = append(choice.Evidence.Alternatives, match)
 			}
-			return best, "File evidence matches folder " + rel
 		}
 	}
-	if dir != f.root && current != nil && len(current.name) > 0 && keep == 0 && len(words) >= 4 {
-		return "", "File may not fit its current folder; no clear nearby destination"
+	if best.Score >= 5 && best.Score >= keep+2 && best.Score >= second.Score+2 {
+		if rel, err := filepath.Rel(f.root, best.Path); err == nil {
+			choice.Path, choice.Clear = best.Path, true
+			switch {
+			case f.allPaths != nil:
+				choice.Reason = f.matchReason(best.Path, words, "The destination")
+			case rel == ".":
+				choice.Reason = "Contents match the selected folder better than the current subfolder"
+			default:
+				choice.Reason = "File evidence matches folder " + rel
+			}
+			return choice
+		}
 	}
-	return "", ""
+	if f.allPaths != nil {
+		switch {
+		case keep >= 5 && keep >= best.Score+2 && current != nil && slices.ContainsFunc(current.name, func(word string) bool { return shared[word] }):
+			choice.Clear = true
+			choice.Reason = f.matchReason(dir, words, "The current folder")
+		case best.Path == "":
+			choice.Reason = "There is no other existing folder in the scan scope"
+		case best.Score < 5:
+			choice.Reason = fmt.Sprintf("The best alternative, %s, scored %d, below the required score of 5", filepath.Base(best.Path), best.Score)
+		case best.Score < keep+2:
+			choice.Reason = fmt.Sprintf("%s scored %d against %d for the current folder and did not lead by 2", filepath.Base(best.Path), best.Score, keep)
+		default:
+			choice.Reason = fmt.Sprintf("%s and %s had similar scores (%d and %d)", filepath.Base(best.Path), filepath.Base(second.Path), best.Score, second.Score)
+		}
+	} else if dir != f.root && current != nil && len(current.name) > 0 && keep == 0 && len(words) >= 4 {
+		choice.Reason = "File may not fit its current folder; no clear nearby destination"
+	}
+	return choice
+}
+
+func (f *folderIndex) matchReason(path string, words []string, subject string) string {
+	profile := f.folders[path]
+	var matching []string
+	for _, word := range words {
+		if slices.Contains(profile.name, word) || profile.titles[word] >= 2 {
+			matching = append(matching, word)
+		}
+	}
+	return fmt.Sprintf("%s %s matches topic words from the document or filename: %s", subject, filepath.Base(path), strings.Join(matching, ", "))
 }
 
 func (f *folderIndex) enableMoveScan(items []entry) {
@@ -219,14 +299,52 @@ func (f *folderIndex) enableMoveScan(items []entry) {
 	}
 	sort.Strings(f.allPaths)
 	f.topics = make(map[string]int)
+	f.topicLabels = make(map[string]string)
+	f.topicAliases = make(map[string]map[string]int)
+	var names []string
 	for _, item := range items {
-		if item.Folder || item.Skip {
-			continue
-		}
-		for _, topic := range leadingTopics(baseName(filepath.Base(item.Path))) {
-			f.topics[topic]++
+		if !item.Folder && !item.Skip {
+			name := baseName(filepath.Base(item.Path))
+			names = append(names, name)
+			for _, topic := range leadingTopics(name) {
+				f.topics[topic]++
+				if f.topicLabels[topic] == "" {
+					f.topicLabels[topic] = displayTopic(name, topic)
+				}
+			}
 		}
 	}
+	for _, name := range names {
+		leading := leadingTopics(name)
+		if len(leading) == 0 || f.topics[leading[0]] < 2 {
+			continue
+		}
+		words := strings.Fields(norm(name))
+		for i := 0; i+1 < min(len(words), 4); i++ {
+			alias := strings.Join(words[i:i+2], " ")
+			if len(topicWords(alias)) < 2 {
+				continue
+			}
+			if f.topicAliases[alias] == nil {
+				f.topicAliases[alias] = make(map[string]int)
+			}
+			f.topicAliases[alias][leading[0]]++
+		}
+	}
+}
+
+var folderLabelWord = regexp.MustCompile(`[\p{L}\p{N}]+`)
+
+func displayTopic(title, topic string) string {
+	words := folderLabelWord.FindAllStringIndex(title, len(strings.Fields(topic)))
+	if len(words) == 0 {
+		return topic
+	}
+	prefix := strings.TrimSpace(title[words[0][0]:words[len(words)-1][1]])
+	if norm(prefix) == topic && validProposedName(prefix, "", true) {
+		return readableTitle(prefix)
+	}
+	return readableTitle(strings.ToUpper(topic))
 }
 
 func leadingTopics(title string) []string {
@@ -237,11 +355,26 @@ func leadingTopics(title string) []string {
 	return []string{strings.Join(words[:2], " "), words[0]}
 }
 
-func (f *folderIndex) suggestNewFolder(path string, e evidence, a assessment, usedAI bool) string {
-	if f == nil || f.topics == nil {
-		return ""
+func (f *folderIndex) proposedLocation(path string, e evidence, a assessment, usedAI bool) locationChoice {
+	choice := f.location(path, e, a, usedAI)
+	if choice.Clear || f == nil || f.topics == nil {
+		return choice
 	}
-	titles := []string{e.Title, baseName(filepath.Base(path))}
+	if len(f.allPaths) == 1 {
+		hasSharedTopic := false
+		for _, count := range f.topics {
+			if count >= 2 {
+				hasSharedTopic = true
+				break
+			}
+		}
+		if !hasSharedTopic {
+			choice.Clear, choice.Reason = true, "The scan has no other folder and no group of filenames supporting a new folder"
+			return choice
+		}
+	}
+	filename := baseName(filepath.Base(path))
+	titles := []string{e.Title, filename}
 	if usedAI {
 		titles = append([]string{a.Title, a.Label}, titles...)
 	}
@@ -249,25 +382,46 @@ func (f *folderIndex) suggestNewFolder(path string, e evidence, a assessment, us
 		if !meaningful(title) {
 			continue
 		}
-		for _, topic := range leadingTopics(title) {
-			if f.topics[topic] < 2 {
+		for _, prefix := range leadingTopics(title) {
+			topic, support := f.preferredTopic(prefix)
+			if support < 2 {
 				continue
 			}
-			if profile := f.folders[filepath.Dir(path)]; profile != nil && norm(filepath.Base(filepath.Dir(path))) == topic {
-				return ""
+			if norm(filepath.Base(filepath.Dir(path))) == topic {
+				return choice
 			}
-			name := readableTitle(strings.ToUpper(topic))
+			name := f.topicLabels[topic]
 			if !validProposedName(name, "", true) {
 				continue
 			}
-			dest := filepath.Join(f.root, name)
 			for _, existing := range f.allPaths {
 				if norm(filepath.Base(existing)) == topic && existing != f.root {
-					return ""
+					return choice
 				}
 			}
-			return dest
+			choice.Path, choice.Clear, choice.New = filepath.Join(f.root, name), true, true
+			choice.Reason = fmt.Sprintf("The phrase %q matches %d filenames in the %s group", prefix, support, name)
+			return choice
 		}
 	}
-	return ""
+	return choice
+}
+
+func (f *folderIndex) preferredTopic(prefix string) (string, int) {
+	topic, support := prefix, f.topics[prefix]
+	var winner string
+	best, second := 0, 0
+	for candidate, count := range f.topicAliases[prefix] {
+		if count > best {
+			winner, best, second = candidate, count, best
+		} else if count > second {
+			second = count
+		}
+	}
+	// A shared filename phrase can join a smaller proposal to a more
+	// established one when the same phrase clearly favours that group.
+	if best >= 2 && best >= second+2 && best >= support+2 {
+		return winner, best
+	}
+	return topic, support
 }

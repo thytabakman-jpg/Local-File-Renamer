@@ -12,19 +12,20 @@ fi
 cp app/icon_windows_amd64.syso installer/icon_windows_amd64.syso
 export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
 go build -buildvcs=false -trimpath -ldflags '-s -w -H windowsgui' -o "$work/LocalFileRenamer.exe" ./app
+go build -buildvcs=false -trimpath -ldflags '-s -w' -o "$work/LocalFileRenamer-MCP.exe" ./launcher
 archive=${LLAMA_CPU_ZIP:-$work/llama-win.zip}
 if [ -z "${LLAMA_CPU_ZIP:-}" ]; then
  curl --fail --silent --show-error --location \
   https://github.com/ggml-org/llama.cpp/releases/download/b12588/llama-b12588-bin-win-cpu-x64.zip \
   --output "$archive"
 fi
-python3 - "$archive" "$work/LocalFileRenamer.exe" <<'PY'
+python3 - "$archive" "$work/LocalFileRenamer.exe" "$work/LocalFileRenamer-MCP.exe" <<'PY'
 import hashlib
 import sys
 import zipfile
 from pathlib import Path
 
-archive, app = map(Path, sys.argv[1:])
+archive, app, launcher = map(Path, sys.argv[1:])
 expected = "e61b81d5e11f49edc88c00aa7513291e0be6a341ff8498083f775ee721568be4"
 if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
     raise SystemExit("The llama.cpp binary archive did not match its expected checksum.")
@@ -39,6 +40,7 @@ with zipfile.ZipFile(archive) as upstream, zipfile.ZipFile("installer/payload.zi
         if name in engine or name.startswith("ggml-cpu-") and name.endswith(".dll"):
             setup.writestr(f"engine/{name}", upstream.read(name))
     setup.write(app, app.name)
+    setup.write(launcher, launcher.name)
     setup.write("LICENSE")
     setup.write("README.md")
     for path in sorted(Path("licenses").iterdir()):

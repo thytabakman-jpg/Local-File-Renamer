@@ -93,6 +93,12 @@ async function loadInspection(key, offset, unknown) {
         tr.append(td);
       }
       const controls = document.createElement("td");
+      if (checked.ModelTrace) {
+        const link = document.createElement("a");
+        link.href = "/api/model-evidence?" + new URLSearchParams({job: page.Job, index: row.Index});
+        link.textContent = "Export model evidence";
+        controls.append(link);
+      }
       if (row.Outcome !== "Skipped" && /\.(pdf|docx|docm|epub|odt)$/i.test(row.Path)) {
         const button = document.createElement("button");
         button.type = "button";
@@ -302,7 +308,7 @@ function duration(ms) {
 }
 
 function fileTiming(checked, rename) {
-  return [[checked.ReadMS, "Reading"], [checked.OCRMS, "OCR"], [checked.StartupMS, "Model startup"], [checked.ModelMS, "Local model"], [checked.OnlineMS, "Online lookup"], [rename, "Rename"]]
+  return [[checked.ReadMS, "Reading"], [checked.OCRMS, "OCR"], [checked.StartupMS, "Model startup"], [checked.ModelMS, "Model request total"], [checked.PromptMS, "Prompt processing"], [checked.GenerationMS, "Generation"], [checked.OnlineMS, "Online lookup"], [rename, "Rename"]]
     .filter(([ms]) => ms > 0).map(([ms, label]) => label + " " + duration(ms)).join("\n") || "No timing recorded";
 }
 

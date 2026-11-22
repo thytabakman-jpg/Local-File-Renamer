@@ -689,8 +689,12 @@ func decideGeneral(name string, e evidence, a assessment, modelUsed bool, rules 
 		title = ""
 		d.Note = joinNote(d.Note, "The extracted PDF title may be incomplete")
 	}
-	if !arxivStamp.MatchString(a.Title) && !unfinishedTitle(a.Title) && oneOfFirstLines(a.Title, e.Text) && (!meaningful(title) || betterTitle(title, a.Title)) {
-		title = a.Title
+	if !arxivStamp.MatchString(a.Title) && !unfinishedTitle(a.Title) && titleInFirstLines(a.Title, e.Text) {
+		extendsOpening := !oneOfFirstLines(a.Title, e.Text) && oneOfFirstLines(title, e.Text) &&
+			strings.HasPrefix(norm(a.Title), norm(title)+" ")
+		if !meaningful(title) || betterTitle(title, a.Title) || extendsOpening {
+			title = a.Title
+		}
 	}
 
 	if frontTitle != "" || meaningful(title) && norm(current) == norm(title) {
@@ -719,7 +723,16 @@ func decideGeneral(name string, e evidence, a assessment, modelUsed bool, rules 
 			}
 		}
 	}
-	d.Reason = "The available evidence did not establish a better name or verify the existing one"
+	switch {
+	case meaningful(a.Title) && !titleInFirstLines(a.Title, e.Text):
+		d.Reason = "The proposed title did not match the extracted opening lines"
+	case meaningful(title) && meaningful(current):
+		d.Reason = "The supported title did not establish a more specific or corrected name"
+	case !meaningful(current) && meaningful(a.Label):
+		d.Reason = "The proposed subject could not be verified against the extracted evidence"
+	default:
+		d.Reason = "The available evidence did not establish a better name or verify the existing one"
+	}
 	return d
 }
 

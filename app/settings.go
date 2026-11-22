@@ -42,6 +42,7 @@ type aiSettings struct {
 	ResponseTokens int    `json:"response_tokens"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	Invoke         string `json:"invoke"`
+	RecordEvidence bool   `json:"record_evidence"`
 }
 
 type resourceSettings struct {
@@ -88,7 +89,7 @@ func defaultSettings() scanSettings {
 		Scope:     scanScope{Subfolders: true},
 		Naming:    defaultRules,
 		Evidence:  evidenceSettings{2, 4, 10000, true, 2, 512, "sparse_or_ambiguous", "enabled", false},
-		AI:        aiSettings{"configured", "", 300, 180, "unresolved"},
+		AI:        aiSettings{"configured", "", 300, 180, "unresolved", false},
 		Resources: resourceSettings{3, 4, 1, 192, "below_normal"},
 		Recovery:  recoverySettings{"propose_with_warning", 1, 1, 0},
 		Cache:     cacheSettings{true, true},
@@ -147,6 +148,7 @@ var settingsSpecs = map[string]settingSpec{
 	"evidence.media_samples":       {Label: "Sample audio and video locally (requires media tools)"},
 	"evidence.online_dates":        choiceSpec("Online search and publication date lookup", "enabled", "off"),
 	"ai.model":                     choiceSpec("Local model", "configured", "qwen3.5-4b", "qwen2.5-vl-3b", "off"),
+	"ai.record_evidence":           {Label: "Save local model evidence for diagnostic export"},
 	"ai.instructions":              {Label: "Additional local model instructions"},
 	"ai.response_tokens":           rangeSpec("Maximum response tokens", 80, 512),
 	"ai.timeout_seconds":           rangeSpec("Model request timeout in seconds", 10, 300),

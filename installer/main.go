@@ -19,6 +19,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"localrenamer/internal/mcplaunch"
 )
 
 //go:embed payload.zip
@@ -62,11 +64,15 @@ func install() (string, error, error) {
 	if local == "" {
 		return "", nil, errors.New("Windows local app data folder was not found")
 	}
-	app, err := installFiles(filepath.Join(local, "Programs"), unpack)
+	programs := filepath.Join(local, "Programs")
+	app, err := installFiles(programs, unpack)
 	if err != nil {
 		return "", nil, err
 	}
 	warn := ensureCRT(filepath.Dir(app))
+	if err := mcplaunch.Install(programs, app, filepath.Join(filepath.Dir(app), mcplaunch.Executable)); err != nil {
+		warn = errors.Join(warn, fmt.Errorf("Stable MCP launcher could not be installed: %w", err))
+	}
 	if err := shortcut(app); err != nil {
 		warn = errors.Join(warn, fmt.Errorf("Start menu shortcut could not be updated. Open the new app at %s", app))
 	}

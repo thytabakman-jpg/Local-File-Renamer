@@ -63,16 +63,19 @@ type record struct {
 	RenameMS                                     int64     `json:",omitempty"`
 	Index                                        int
 	Status, Note, Path                           string
-	Kind, Decision, Reason, OverrideKind         string               `json:",omitempty"`
-	Move                                         *move                `json:",omitempty"`
-	Inspection                                   inspection           `json:",omitempty"`
-	Digest, TextDigest, EquivalentDigest         string               `json:",omitempty"`
-	Stamp                                        stamp                `json:",omitempty"`
-	Unknown, Auto, Partial, AutoValidated, Rough bool                 `json:",omitempty"`
-	Metadata                                     *metadataEdit        `json:",omitempty"`
-	Transaction                                  *metadataTransaction `json:",omitempty"`
-	Selection                                    []int                `json:",omitempty"`
-	Excluded                                     []int                `json:",omitempty"`
+	Kind, Decision, Reason, OverrideKind         string                    `json:",omitempty"`
+	Move                                         *move                     `json:",omitempty"`
+	Inspection                                   inspection                `json:",omitempty"`
+	Digest, TextDigest, EquivalentDigest         string                    `json:",omitempty"`
+	Stamp                                        stamp                     `json:",omitempty"`
+	Unknown, Auto, Partial, AutoValidated, Rough bool                      `json:",omitempty"`
+	Metadata                                     *metadataEdit             `json:",omitempty"`
+	Transaction                                  *metadataTransaction      `json:",omitempty"`
+	Selection                                    []int                     `json:",omitempty"`
+	Excluded                                     []int                     `json:",omitempty"`
+	MoveOverrides                                []approvedMoveDestination `json:",omitempty"`
+	BatchID                                      string                    `json:",omitempty"`
+	ExactBatch                                   *exactRecycleBatch        `json:",omitempty"`
 }
 type indexedMove struct {
 	move     move
@@ -120,6 +123,9 @@ type session struct {
 	metadataIndex, metadataUndone                                           int
 	metadataPlans, repaired                                                 []record
 	restoredStamps                                                          map[int]stamp
+	exactBatches                                                            map[string]*exactRecycleBatch
+	batchRecycled                                                           map[string]map[int]bool
+	recycleErrors                                                           map[int]bool
 }
 
 func inventory(ctx context.Context, root string) ([]entry, error) {
@@ -388,7 +394,18 @@ func (s *session) validateRecord(r record) error {
 			r.Path != s.manifest.Items[r.Index].Path {
 			return errors.New("revision does not match an unapplied plan")
 		}
+	case "exact-batch-approved":
+		if s.manifest.Operation != scanDuplicates || r.ExactBatch == nil || r.ExactBatch.Revision != s.planRevision ||
+			len(r.ExactBatch.Groups) == 0 || r.ExactBatch.ID != exactBatchID(filepath.Base(s.dir), r.ExactBatch.Revision, r.ExactBatch.Groups) {
+			return errors.New("invalid exact duplicate approval")
+		}
 	case "recycle-intent":
+		if r.BatchID != "" {
+			batch := s.exactBatches[r.BatchID]
+			if batch == nil || !batch.includes(r.Index) || s.batchRecycled[r.BatchID][r.Index] {
+				return errors.New("recycle request does not match its exact duplicate approval")
+			}
+		}
 		if s.pending != nil || r.Index < s.applyThrough || r.Index >= len(s.plans) || s.autoCompleted[r.Index] ||
 			r.Path != s.manifest.Items[r.Index].Path || r.Stamp.ID == "" || r.Stamp.Dir {
 			return errors.New("recycle request does not match an unapplied file")
@@ -406,6 +423,19 @@ func (s *session) validateRecord(r record) error {
 			if i < s.applyThrough || i >= len(s.plans) {
 				return errors.New("selection index does not match an assessed item")
 			}
+		}
+		selected := make(map[int]bool)
+		for _, i := range r.Selection {
+			selected[i] = true
+		}
+		for _, override := range r.MoveOverrides {
+			i, move := override.Index, override.Move
+			if s.manifest.Operation != scanMove || !selected[i] || s.plans[i].Move == nil ||
+				move.From != s.plans[i].Move.From || move.Stamp != s.plans[i].Move.Stamp ||
+				!within(s.manifest.Root, move.To) || filepath.Base(move.To) != filepath.Base(move.From) {
+				return errors.New("destination override does not match an approved file")
+			}
+			delete(selected, i)
 		}
 	case "selected-metadata":
 		if len(s.selection) == 0 || r.Index != s.selection[0] || s.plans[r.Index].Metadata == nil {
@@ -453,7 +483,7 @@ func (s *session) countFileAssessment(r record, increment int) {
 		s.filesVerified += increment
 		s.filesKept += increment
 		s.filesAssessed += increment
-	case "Kept existing name", "Name kept by operator", "Name kept by preference":
+	case "Kept existing name", "Name kept by operator", "Name kept by preference", "Location kept":
 		s.filesKept += increment
 		s.filesAssessed += increment
 	default:
@@ -495,6 +525,17 @@ func (s *session) accept(r record) {
 		s.planVersions = append(s.planVersions, s.planRevision)
 		s.indexPlan(r)
 	case "apply-selection":
+		for _, override := range r.MoveOverrides {
+			plan := &s.plans[override.Index]
+			move := override.Move
+			plan.Move = &move
+			plan.Reason = "The operator approved a different destination folder"
+			s.planRevision++
+			s.planVersions[override.Index] = s.planRevision
+		}
+		if len(r.MoveOverrides) != 0 {
+			s.reindexPlans()
+		}
 		s.selection = append([]int(nil), r.Selection...)
 	case "selection-done":
 		s.selection = s.selection[1:]
@@ -519,11 +560,35 @@ func (s *session) accept(r record) {
 		s.index = r.Index + 1
 	case "intent", "undo-intent", "single-intent", "metadata-intent", "metadata-undo-intent", "recycle-intent":
 		s.pending = &r
+	case "exact-batch-approved":
+		if s.exactBatches == nil {
+			s.exactBatches = make(map[string]*exactRecycleBatch)
+			s.batchRecycled = make(map[string]map[int]bool)
+		}
+		r.ExactBatch.approvedCopies = make(map[int]bool)
+		for _, group := range r.ExactBatch.Groups {
+			for _, index := range group.Indices {
+				r.ExactBatch.approvedCopies[index] = true
+			}
+		}
+		s.exactBatches[r.ExactBatch.ID] = r.ExactBatch
+		s.batchRecycled[r.ExactBatch.ID] = make(map[int]bool)
 	case "recycle-result":
+		batchID := s.pending.BatchID
 		s.pending = nil
 		s.planRevision++
 		s.planVersions[r.Index] = s.planRevision
+		if r.Status == "present" {
+			if s.recycleErrors == nil {
+				s.recycleErrors = make(map[int]bool)
+			}
+			s.recycleErrors[r.Index] = true
+		}
 		if r.Status == "absent" {
+			delete(s.recycleErrors, r.Index)
+			if batchID != "" {
+				s.batchRecycled[batchID][r.Index] = true
+			}
 			s.recycled++
 			plan := s.plans[r.Index]
 			s.countFileAssessment(plan, -1)
@@ -534,7 +599,9 @@ func (s *session) accept(r record) {
 			s.countFileAssessment(plan, 1)
 			s.plans[r.Index] = plan
 			delete(s.outcomes, r.Index)
-			s.reindexPlans()
+			if s.manifest.Operation != scanDuplicates {
+				s.reindexPlans()
+			}
 		}
 	case "plan-auto-blocked":
 		s.pending = nil

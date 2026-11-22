@@ -622,7 +622,7 @@ func (a *application) run(ctx context.Context, s *session, partial bool) {
 			pre = &p
 		}
 		d, st, err := inspectPrepared(ctx, s, assess, transcribe, index, "", false, opts, pre)
-		engine.timings(&d.Inspection, partial)
+		engine.timings(&d.Inspection, partial, index)
 		a.mu.Lock()
 		if err == nil {
 			failure = recordSuggestion(s, index, d, st)

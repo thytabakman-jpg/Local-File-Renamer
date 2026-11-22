@@ -203,6 +203,45 @@ func server(a *application) *http.Server {
 		}
 		reply(w, value)
 	})
+	mux.HandleFunc("GET /api/kept-locations", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		q := r.URL.Query()
+		offset, err := strconv.Atoi(q.Get("offset"))
+		revision, revErr := strconv.ParseUint(q.Get("revision"), 10, 64)
+		if err != nil || revErr != nil {
+			http.Error(w, "Choose the current Move File results", 400)
+			return
+		}
+		page, err := a.bridgeResults(bridgeCommand{Job: q.Get("job"), Filter: "kept_locations",
+			Offset: offset, Revision: &revision, IncludeNames: true})
+		if err != nil {
+			http.Error(w, err.Error(), 409)
+			return
+		}
+		reply(w, page)
+	})
+	mux.HandleFunc("GET /api/model-evidence", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		q := r.URL.Query()
+		index, err := strconv.Atoi(q.Get("index"))
+		if err != nil {
+			http.Error(w, "Choose an assessed file", 400)
+			return
+		}
+		data, err := a.modelTrace(q.Get("job"), index)
+		if err != nil {
+			http.Error(w, "No model evidence was saved for this assessment", 404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=model-evidence-%d.json", index))
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(data)
+	})
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return

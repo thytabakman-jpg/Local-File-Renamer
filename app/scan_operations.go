@@ -50,6 +50,7 @@ type operationResults struct {
 	Unresolved        int
 	Skipped, Recycled int
 	CanRecycle        bool
+	possible          []duplicateGroup
 }
 
 func (a *application) scanResults(id string) (operationResults, error) {
@@ -320,6 +321,10 @@ func similarFilename(path string) string {
 }
 
 func (s *session) duplicateResults() operationResults {
+	return s.duplicateResultsWithCandidates(false)
+}
+
+func (s *session) duplicateResultsWithCandidates(details bool) operationResults {
 	exact := make(map[string][]record)
 	equivalent := make(map[string][]record)
 	byName := make(map[string][]record)
@@ -383,10 +388,14 @@ func (s *session) duplicateResults() operationResults {
 			}
 			seen[key.String()] = true
 			result.Unresolved++
+			if details {
+				candidate := s.describeDuplicates(group, "Unresolved candidate")
+				result.possible = append(result.possible, candidate)
+			}
 		}
 	}
-	for _, groups := range [][]duplicateGroup{result.Exact, result.Verified} {
-		slices.SortFunc(groups, func(a, b duplicateGroup) int { return strings.Compare(a.Files[0], b.Files[0]) })
+	for _, groups := range [][]duplicateGroup{result.Exact, result.Verified, result.possible} {
+		slices.SortFunc(groups, func(a, b duplicateGroup) int { return slices.Compare(a.Files, b.Files) })
 	}
 	return result
 }
