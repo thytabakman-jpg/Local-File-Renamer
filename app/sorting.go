@@ -115,23 +115,31 @@ func (f *folderIndex) candidates(dir string) []string {
 
 func topicFromEvidence(e evidence, a assessment, usedAI bool) []string {
 	var sources []string
-	for _, title := range []string{e.Title, a.Title, a.Label} {
-		if meaningful(title) {
-			sources = append(sources, chars(title, 240))
-		}
+	if meaningful(e.Title) {
+		sources = append(sources, chars(e.Title, 240))
 	}
-	if len(sources) == 0 || !usedAI {
-		for _, line := range textLines(chars(e.Text, 650)) {
+	for _, sample := range []string{e.Text, e.FollowupText} {
+		lines := 0
+		for _, line := range textLines(chars(sample, 650)) {
 			if meaningful(line) && !titleHeading.MatchString(line) {
 				sources = append(sources, chars(line, 180))
+				lines++
 			}
-			if len(sources) >= 3 {
+			if lines == 3 {
 				break
 			}
 		}
 	}
 	words := topicWords(strings.Join(sources, " "))
-	return words[:min(24, len(words))]
+	words = words[:min(24, len(words))]
+	if usedAI {
+		for _, word := range topicWords(chars(a.Title, 240) + " " + chars(a.Label, 240)) {
+			if !slices.Contains(words, word) {
+				words = append(words, word)
+			}
+		}
+	}
+	return words
 }
 
 func (p *folderProfile) score(words map[string]bool, excluded map[string]bool) int {
@@ -376,7 +384,7 @@ func (f *folderIndex) proposedLocation(path string, e evidence, a assessment, us
 	filename := baseName(filepath.Base(path))
 	titles := []string{e.Title, filename}
 	if usedAI {
-		titles = append([]string{a.Title, a.Label}, titles...)
+		titles = append(titles, a.Title, a.Label)
 	}
 	for _, title := range titles {
 		if !meaningful(title) {

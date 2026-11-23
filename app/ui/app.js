@@ -350,7 +350,7 @@ async function action(name, fields = {}) {
     const r = await fetch("/api/action", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: name, ...fields }),
-      ...(["pick","recycle-duplicates","recycle-duplicate-groups","recycle-verified-duplicates"].includes(name) ? {} : {signal:AbortSignal.timeout(15000)})
+      ...(["pick","recycle-duplicates","recycle-duplicate-groups","recycle-verified-duplicates","recycle-all-recommendations","apply-all","apply-chosen-names"].includes(name) ? {} : {signal:AbortSignal.timeout(15000)})
     });
     if (!r.ok) throw new Error((await r.text()).trim());
     if (name === "exit") {
@@ -684,6 +684,24 @@ el("model").onclick = () => action(latest.Phase === "download" ? "pause" : "mode
 el("undo").onclick = () => {
   if (latest.Phase === "undo-paused" || window.confirm("Undo applied file moves, renames, and metadata repairs for this run?")) action("undo");
 };
+async function applyAllProposals(filter, folder, description) {
+  const {Job, Revision} = latest;
+  if (!Job || latest.PreviewOnly) return;
+  try {
+    const q = new URLSearchParams({job:Job, revision:Revision, filter, folder});
+    const response = await fetch("/api/apply-all?" + q, {cache:"no-store"});
+    if (!response.ok) throw new Error((await response.text()).trim());
+    const {count} = await response.json();
+    if (!count) return notice("No pending changes match this review.");
+    if (!window.confirm("Apply all " + count + " " + description + "?")) return;
+    if (await action("apply-all",{id:Job,revision:Revision,group:filter,root:folder,count})) {
+      selectedItems.clear();
+    }
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
 el("apply").onclick = async () => {
   if (latest.Phase === "apply-paused") {
     action("apply",{id:latest.Job,revision:latest.Revision});

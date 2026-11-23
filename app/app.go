@@ -69,6 +69,12 @@ type view struct {
 }
 
 type application struct {
+	testMu                  sync.Mutex
+	testActive              testReceipt
+	testCancel              context.CancelFunc
+	testDone                chan struct{}
+	testModelPeak           uint64
+	modelOwner              *chatSession
 	chat                    chatSession
 	online                  *onlineLookup
 	scanActive              bool
@@ -938,24 +944,8 @@ func (a *application) inspectionPageFiltered(offset int, unknown bool, filter st
 		if a.s.manifest.Items[r.Index].Folder || unknown && !r.Unknown {
 			continue
 		}
-		decision := planOutcome(r)
-		switch filter {
-		case "kept":
-			if decision != "Name verified" && decision != "Kept existing name" && !strings.HasPrefix(decision, "Name kept") {
-				continue
-			}
-		case "auto":
-			if _, ok := a.s.automaticMoves[r.Index]; !ok {
-				continue
-			}
-		case "flagged":
-			if !flaggedPlan(r) && !a.s.canRefine(r.Index) && !strings.Contains(a.s.outcomes[r.Index].Note, "Rename failed:") {
-				continue
-			}
-		case "unassessed":
-			if decision != "Not assessed" {
-				continue
-			}
+		if !reviewMatches(a.s, r, filter) {
+			continue
 		}
 		if page.Total >= offset && len(page.Rows) < 100 {
 			row := inspectionRow{Path: a.s.currentPath(r.Path, r.Index), Note: r.Note, Unknown: r.Unknown, Inspection: r.Inspection, Index: r.Index, Revision: a.s.planVersions[r.Index], Kind: r.Kind, Reason: r.Reason, Decision: planOutcome(r)}

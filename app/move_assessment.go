@@ -9,8 +9,30 @@ import (
 func inspectLocation(ctx context.Context, s *session, assess assessFile, opts scanSettings, path, name, cacheName string,
 	pre preparedEvidence, e evidence, ocr string, ocrMS int64, ocrErr error, refresh bool) decision {
 	choice := s.sortIndex.proposedLocation(path, e, assessment{}, false)
+	var followup string
+	if !choice.Clear && opts.Evidence.DeepenOn == "sparse_or_ambiguous" && !pre.Deepened &&
+		strings.EqualFold(extension(path), ".pdf") && opts.Evidence.ExtraPDFPages > 0 && ctx.Err() == nil {
+		started := time.Now()
+		pre.Evidence = e
+		added := addPDFEvidence(ctx, path, opts, &pre)
+		pre.ReadMS += elapsedMS(started)
+		if added {
+			e = pre.Evidence
+			choice = s.sortIndex.proposedLocation(path, e, assessment{}, false)
+			followup = "Read later PDF pages"
+			if choice.Clear {
+				followup += " and resolved the folder decision"
+			}
+		} else {
+			followup = "Later PDF pages supplied no readable text"
+		}
+		// The earlier cached assessment was based on different input.
+		pre.Reused = false
+	} else if e.FollowupText != "" {
+		followup = "Used later PDF pages"
+	}
 	check := inspection{Text: strings.TrimSpace(e.Text) != "", Metadata: e.Title != "" || e.Author != "" || e.Summary != "",
-		Image: len(e.Photo) != 0, AI: "Off", Detail: e.Note, ReadMS: pre.ReadMS, OCR: ocr, OCRMS: ocrMS}
+		Image: len(e.Photo) != 0, AI: "Off", Detail: joinNote(e.Note, followup), ReadMS: pre.ReadMS, OCR: ocr, OCRMS: ocrMS}
 	if pre.Reused {
 		check.Cache = "Evidence reused"
 	}
@@ -40,9 +62,13 @@ func inspectLocation(ctx context.Context, s *session, assess assessFile, opts sc
 		if modelErr == nil {
 			check.AI = "Used"
 			check.AIContribution = "No location change"
-			if next := s.sortIndex.proposedLocation(path, e, topic, true); next.Path != choice.Path {
+			if next := s.sortIndex.proposedLocation(path, e, topic, true); next.Clear {
 				choice = next
-				check.AIContribution = "Identified a destination"
+				if next.Path == "" {
+					check.AIContribution = "Confirmed the current folder"
+				} else {
+					check.AIContribution = "Identified a destination"
+				}
 			}
 		}
 	}
@@ -55,6 +81,9 @@ func inspectLocation(ctx context.Context, s *session, assess assessFile, opts sc
 		_ = atomicJSON(cacheName, cached)
 	}
 	d := decision{Name: name, Folder: choice.Path, NewFolder: choice.New, Reason: choice.Reason}
+	if !choice.Clear {
+		d.Outcome = "Needs review"
+	}
 	if modelErr != nil {
 		status, detail := localAIIssue(modelErr)
 		if opts.AI.TimeoutSeconds != 180 {

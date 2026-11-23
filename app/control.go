@@ -102,59 +102,67 @@ func (a *application) correct(id string, revision uint64, index int, kind string
 }
 
 func (a *application) correctLocked(id string, revision uint64, index int, kind string, name *string) error {
+	plan, err := a.prepareCorrectionLocked(id, revision, index, kind, name)
+	if err != nil {
+		return err
+	}
+	if err := a.s.append(plan); err != nil {
+		return err
+	}
+	a.syncSession(true)
+	return nil
+}
+
+func (a *application) prepareCorrectionLocked(id string, revision uint64, index int, kind string, name *string) (record, error) {
 	if kind == "" && name == nil || kind != "" && !slices.Contains(classifications, kind) {
-		return errors.New("Supply a supported classification or a proposed filename")
+		return record{}, errors.New("Supply a supported classification or a proposed filename")
 	}
 	if a.s != nil && a.s.rowUnchanged(index, revision) {
 		revision = a.v.Revision
 	}
 	s, err := a.editable(id, revision)
 	if err != nil {
-		return err
+		return record{}, err
 	}
 	if s.manifest.Operation == scanMove {
-		return errors.New("Use File Renamer to change filenames or classifications")
+		return record{}, errors.New("Use File Renamer to change filenames or classifications")
 	}
 	if name != nil && kind == "" && s.canRefine(index) {
 		plan := s.plans[index]
 		path := s.currentPath(plan.Path, index)
 		if err := safeParent(s.manifest.Root, path); err != nil {
-			return err
+			return record{}, err
 		}
 		st, err := fingerprint(path)
 		if err != nil || st != plan.Stamp {
-			return errors.New("The image changed since the scan")
+			return record{}, errors.New("The image changed since the scan")
 		}
 		old := filepath.Base(path)
 		if *name == old || !validProposedName(*name, old, false) || windowsNameLength(*name) > s.namingRules().MaxLength {
-			return errors.New("Supply a different valid filename with the original extension")
+			return record{}, errors.New("Supply a different valid filename with the original extension")
 		}
 		target := filepath.Join(filepath.Dir(path), *name)
 		if err := s.availableForPlan(path, target); err != nil {
-			return err
+			return record{}, err
 		}
 		plan.Type, plan.Decision, plan.Reason = "image-refinement", "Rename proposed", "Selected a more specific image name"
 		plan.Move, plan.Auto, plan.AutoValidated, plan.Rough = &move{From: path, To: target, Stamp: st}, false, false, false
-		if err := s.append(plan); err != nil {
-			return err
-		}
-		a.syncSession(true)
-		return nil
+		return plan, nil
 	}
 	prior, err := s.checkEditable(index)
 	if err != nil {
-		return err
+		return record{}, err
 	}
 	item := s.manifest.Items[index]
 	if item.Folder && kind != "" {
-		return errors.New("Only files have a classification")
+		return record{}, errors.New("Only files have a classification")
 	}
 	if err := safeParent(s.manifest.Root, prior.Path); err != nil {
-		return err
+		return record{}, err
 	}
 	st, err := fingerprint(prior.Path)
 	if err != nil || st.Dir != item.Folder || prior.Stamp.ID != "" && st != prior.Stamp {
-		return errors.New("The original changed since inspection. Reassess it first.")
+		return record{}, errors.New("The original changed since inspection. Reassess it first.")
 	}
 	if name == nil {
 		prior.Move, prior.Metadata, prior.Auto = nil, nil, false
@@ -164,7 +172,7 @@ func (a *application) correctLocked(id string, revision uint64, index int, kind 
 		old := filepath.Base(prior.Path)
 		to := *name
 		if !validProposedName(to, old, item.Folder) || windowsNameLength(to) > s.namingRules().MaxLength {
-			return errors.New("Supply a valid Windows filename with the original extension")
+			return record{}, errors.New("Supply a valid Windows filename with the original extension")
 		}
 		d := decision{Name: to, Outcome: "Rename proposed", Reason: "Proposed filename corrected by the operator", Inspection: prior.Inspection, Metadata: prior.Metadata, Unknown: prior.Unknown}
 		if to == old {
@@ -176,10 +184,10 @@ func (a *application) correctLocked(id string, revision uint64, index int, kind 
 		}
 		plan := buildSuggestion(s, index, d, st, true)
 		if d.Folder != "" && d.Folder != filepath.Dir(prior.Path) && (plan.Move == nil || filepath.Dir(plan.Move.To) != d.Folder) {
-			return errors.New(plan.Note)
+			return record{}, errors.New(plan.Note)
 		}
 		if to != old && plan.Move == nil {
-			return errors.New(plan.Note)
+			return record{}, errors.New(plan.Note)
 		}
 		plan.Kind, plan.OverrideKind = prior.Kind, prior.OverrideKind
 		prior = plan
@@ -188,11 +196,7 @@ func (a *application) correctLocked(id string, revision uint64, index int, kind 
 	if kind != "" {
 		prior.Kind, prior.OverrideKind = kind, kind
 	}
-	if err := s.append(prior); err != nil {
-		return err
-	}
-	a.syncSession(true)
-	return nil
+	return prior, nil
 }
 
 func (a *application) reassess(id string, revision uint64, indexes []int, group, value string, refresh bool) error {

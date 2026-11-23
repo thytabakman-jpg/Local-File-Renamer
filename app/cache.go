@@ -10,10 +10,11 @@ import (
 	"time"
 )
 
-const evidenceVersion = "3.4.0"
+const evidenceVersion = "3.6.0"
 const assessmentVersion = "2.8.0-llama-b12588"
 
 type assessmentCache struct {
+	Deepened                           bool   `json:",omitempty"`
 	MediaSampled                       bool   `json:",omitempty"`
 	MediaTools                         string `json:",omitempty"`
 	Stamp                              stamp
@@ -36,7 +37,7 @@ type cachedMoveTopic struct {
 	Assessment        assessment
 }
 
-const moveTopicVersion = "1"
+const moveTopicVersion = "2"
 
 func localEvidenceSettings(config evidenceSettings) evidenceSettings {
 	config.OnlineDates = ""
@@ -47,7 +48,7 @@ func evidenceCache(pre preparedEvidence, e evidence, ocr string, opts scanSettin
 	if pre.Reused {
 		return pre.Cached
 	}
-	cached := assessmentCache{Stamp: pre.Stamp, EvidenceVersion: evidenceVersion, Evidence: e, OCR: ocr,
+	cached := assessmentCache{Deepened: pre.Deepened, Stamp: pre.Stamp, EvidenceVersion: evidenceVersion, Evidence: e, OCR: ocr,
 		EvidenceConfig: opts.Evidence, DecodeMemory: opts.Resources.DecodeMemoryMiB, AIConfig: opts.AI}
 	if ocr == "Read sampled pages" {
 		cached.OCRModel = modelCacheKey(opts.AI.Model)

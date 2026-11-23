@@ -18,6 +18,7 @@ import (
 const bridgeURL = "http://127.0.0.1:39173/api/bridge"
 
 type bridgeCommand struct {
+	Test          *testPlan                  `json:"test_plan,omitempty"`
 	Action        string                     `json:"action"`
 	Operation     scanOperation              `json:"operation,omitempty"`
 	Job           string                     `json:"job,omitempty"`
@@ -60,7 +61,7 @@ type bridgeCommand struct {
 	MediaSamples  *bool                      `json:"media_samples,omitempty"`
 }
 
-const appVersion = "3.5"
+const appVersion = "3.6"
 const bridgeVersion = 4
 const bridgeResponseLimit = 512 << 10
 
@@ -132,6 +133,23 @@ func (a *application) bridgeAction(cmd bridgeCommand) (any, error) {
 		return 0
 	}
 	switch cmd.Action {
+	case "test_status":
+		response, err = a.testStatus(cmd.Job)
+	case "test_start":
+		if !cmd.Authorized {
+			return nil, errors.New("Review the test plan and obtain approval before starting it")
+		}
+		if cmd.Test != nil {
+			if cmd.Job != "" {
+				return nil, errors.New("Supply a saved job ID or a test plan")
+			}
+			saved, err := a.saveTestPlan(*cmd.Test)
+			if err != nil {
+				return nil, err
+			}
+			cmd.Job = saved.Job
+		}
+		response, err = a.startTest(cmd.Job)
 	case "status":
 		response, err = a.bridgeStatus(cmd.Job)
 	case "capabilities":
@@ -331,6 +349,8 @@ func bridgeToolList() []map[string]any {
 		"prefer_specific_title": flag, "spelling": map[string]any{"type": "object", "additionalProperties": str}},
 		"normalize_spacing", "replace_underscores", "normalize_uppercase", "prefer_specific_title")
 	return []map[string]any{
+		bridgeTool("test_start", "Start a user-approved local experiment from a saved test job or an explicit test plan. Returns a compact receipt. Passing a completed job reruns its saved plan.", map[string]any{"job": str, "test_plan": testPlanToolSchema(), "authorized": flag}, "authorized"),
+		bridgeTool("test_status", "Check the progress or completion receipt of a local experiment. Open History in the Windows app to download the report.", map[string]any{"job": str}, "job"),
 		bridgeTool("status", "Read the compact operation receipt by job ID. A completed duplicate scan can include its exact-copy approval plan.", map[string]any{"job": str}),
 		bridgeTool("capabilities", "Check the STDIO bridge version and the running Windows app version separately.", nil),
 		bridgeTool("diagnostics", "Read timing and recent issues for a selected or saved run. Set include_names only when the user requests per-file detail.", map[string]any{"job": str, "include_names": flag}),

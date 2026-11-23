@@ -16,7 +16,7 @@
   <main>
     <noscript><p>Enable JavaScript or open the app in another browser to use its controls.</p></noscript>
     <aside class="side-nav">
-      <div class="brand"><img class="mark" src="/mark.png" alt=""><h1>Local File Renamer <small id="app-version">3.5</small></h1></div>
+      <div class="brand"><img class="mark" src="/mark.png" alt=""><h1>Local File Renamer <small id="app-version">3.6</small></h1></div>
       <nav class="view-tabs" aria-label="Renamer views">
         <button type="button" id="scan-tab" data-view="scan" aria-pressed="true">New scan</button>
         <button type="button" data-view="review" aria-pressed="false">Review</button>
@@ -33,10 +33,11 @@
       <div class="prototype-page-grid"><aside class="prototype-page-rail"><div class="prototype-rail-cap">Quick actions</div><div class="prototype-chat-prompts" aria-label="Example questions">
         <button type="button" class="secondary" data-chat-example="Show auto-renamed files">Show auto-renamed files</button>
         <button type="button" class="secondary" data-chat-example="Show flagged files">Show flagged files</button>
+        <button type="button" class="secondary" id="chat-test-prompt">Plan a local test</button>
       </div></aside><section class="card prototype-chat-card"><div class="section-title"><div><p>Ask about your files, control the current scan, or search online.</p></div><button type="button" id="reset-chat" class="quiet">New conversation</button></div>
       <div class="actions">
         <label for="chat-model">Model</label>
-        <select id="chat-model"><option value="configured">Renamer default</option><option value="qwen3.5-4b">Qwen3.5-4B</option><option value="qwen2.5-vl-3b">Qwen2.5-VL-3B</option></select>
+        <select id="chat-model"><option value="configured">Renamer default</option><option value="qwen3.5-4b">Qwen3.5-4B</option><option value="qwen2.5-vl-3b">Qwen2.5-VL-3B</option><option value="qwen3.5-9b">Qwen3.5-9B</option></select>
       </div>
       <div class="prototype-chat-context">
         <p id="chat-folder" class="run-hint"></p><p id="prototype-chat-run"></p>
@@ -44,7 +45,7 @@
       <div id="chat-log" role="log" aria-label="Local chat messages"></div>
       <form id="chat-form">
         <label for="chat-input">Message</label>
-        <textarea id="chat-input" rows="3" maxlength="2500" placeholder="Search online for a topic or check the year for proposal 0"></textarea>
+        <textarea id="chat-input" rows="3" maxlength="6000" placeholder="Search online for a topic or check the year for proposal 0"></textarea>
         <div class="actions"><button id="chat-send" type="submit" class="primary">Send</button><span id="chat-status" role="status"></span></div>
       </form>
       </section></div>
@@ -140,7 +141,9 @@
                 <button id="move-change-location" type="button" class="secondary">Choose another folder</button>
               </div>
             </section>
-            <div class="actions"><button id="apply-moves" class="primary" disabled>Apply selected moves</button></div>
+            <div class="actions"><button id="apply-moves" class="primary" disabled>Apply selected moves</button>
+              <button id="apply-folder-moves" class="secondary" hidden>Apply all in this folder</button>
+              <button id="apply-all-moves" class="secondary" hidden>Apply all moves</button></div>
           </section>
           <details id="kept-locations" class="review-detail">
             <summary>Files kept in place</summary>
@@ -150,14 +153,15 @@
           </details>
         </div>
         <div id="duplicate-results" hidden>
+          <div class="actions"><button id="apply-all-duplicates" type="button" class="primary" hidden>Apply all cleanup recommendations</button></div>
           <section data-duplicate-panel="exact" class="card"><h3>Exact duplicates</h3>
           <div id="exact-duplicates"></div>
-          <button id="accept-duplicate-recommendations" class="primary" type="button" hidden>Accept recommendations</button>
+          <button id="accept-duplicate-recommendations" class="primary" type="button" hidden>Apply selected copies</button>
           </section>
           <section data-duplicate-panel="verified" class="card" hidden><h3>Recommended cleanup</h3>
           <p id="verified-duplicate-summary" class="run-hint"></p>
           <div id="verified-duplicates"></div>
-          <button id="approve-all-verified" type="button" class="primary" hidden>Approve all</button></section>
+          <button id="approve-all-verified" type="button" class="primary" hidden>Apply all verified recommendations</button></section>
           <div id="duplicate-recycle-receipt" role="status"></div>
         </div>
       </section>
@@ -218,7 +222,7 @@
                 <section id="flagged-names" aria-label="Naming options" hidden>
                   <div class="actions"><button id="recommend-names" class="secondary" type="button">Recommended names</button></div>
                   <p class="run-hint" id="recommended-names-status" role="status"></p>
-                  <div id="recommended-names-list" class="recommended-names" role="group" aria-label="Name choices"></div><div class="actions" id="save-recommended-name" hidden><button id="use-recommended-name" type="button" class="primary">Apply chosen name</button></div>
+                  <div id="recommended-names-list" class="recommended-names" role="group" aria-label="Name choices"></div><div class="actions" id="save-recommended-name" hidden><button id="use-recommended-name" type="button" class="primary">Apply chosen name</button><button id="queue-recommended-name" type="button" class="secondary">Queue chosen name</button></div>
                 </section>
                 <p id="metadata-unchanged">Metadata: No change</p>
                 <div id="metadata-diff" class="file-diff" hidden>
@@ -248,6 +252,9 @@
           <div class="actions">
             <button id="review-undo" class="secondary" hidden>Undo changes</button>
             <button id="apply" class="primary" hidden>Apply selected</button>
+            <button id="apply-all-renames" class="secondary" hidden>Apply all proposals</button>
+            <button id="apply-all-names" class="secondary" hidden>Apply all queued names</button>
+            <button id="clear-queued-names" class="quiet" hidden>Clear queued names</button>
           </div>
         </footer>
         <div class="actions" id="page-controls" hidden><button id="previous-page" class="secondary">Previous</button><span id="preview-range"></span><button id="next-page" class="secondary">Next</button></div>
@@ -301,6 +308,12 @@
         <div class="actions"><button id="history-review" type="button" class="primary">Open in Review</button><button id="history-bug-report" type="button" class="secondary">Copy bug report</button><button id="data" class="quiet">Open app data</button></div>
       </section>
     </div>
+    <section class="card" aria-labelledby="test-runs-title">
+      <h3 id="test-runs-title">Local tests</h3>
+      <p id="test-history-status" role="status"></p>
+      <div id="test-run-list"></div>
+      <div id="saved-test-editor"></div>
+    </section>
     <details id="comparison-panel" class="card flags" hidden>
       <summary>Compare scans</summary>
       <p>Turn on comparison hashes in two scans of separate, unchanged copies.</p>

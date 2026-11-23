@@ -46,6 +46,12 @@ func modelProfileFor(selection string) (string, string, []resource) {
 	if selection == "off" {
 		return "Off", "", nil
 	}
+	if selection == "qwen3.5-9b" {
+		return "Qwen3.5-9B", "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/99a1b2185534379e6e8b5ec869da25d3e7b3f73c/", []resource{
+			{"Qwen3.5-9B-Q4_K_M.gguf", "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", 5680522464},
+			{"mmproj-Qwen3.5-9B-F16.gguf", "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f", 918166080},
+		}
+	}
 	if selection == "qwen2.5-vl-3b" {
 		return "Qwen2.5-VL-3B", "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/5037fcf163dd95d1e41d1974465f0898ed108ca2/", []resource{
 			{"Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12", 1929901056},
@@ -129,7 +135,11 @@ func (r deadlineReader) Read(p []byte) (int, error) {
 func fetchModel(ctx context.Context, dir, base string, r resource, offset int64, progress func(int64)) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	req, err := http.NewRequestWithContext(ctx, "GET", base+r.name+"?download=true", nil)
+	remoteName := r.name
+	if remoteName == "mmproj-Qwen3.5-9B-F16.gguf" {
+		remoteName = "mmproj-F16.gguf"
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", base+remoteName+"?download=true", nil)
 	if err != nil {
 		return err
 	}

@@ -21,12 +21,19 @@ type scanModel struct {
 	capture              completionCapture
 }
 
+func (m *scanModel) modelChat() *chatSession {
+	if m.app.modelOwner != nil {
+		return m.app.modelOwner
+	}
+	return &m.app.chat
+}
+
 func (m *scanModel) call(ctx context.Context, vision bool, run func(*localModel) error) error {
 	if !m.holdsSlot {
 		select {
-		case m.app.chat.slot <- struct{}{}:
+		case m.modelChat().slot <- struct{}{}:
 			m.holdsSlot = true
-			m.app.chat.closeModel()
+			m.modelChat().closeModel()
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -69,38 +76,50 @@ func (m *scanModel) call(ctx context.Context, vision bool, run func(*localModel)
 }
 
 func (m *scanModel) close() {
+	if m.app.modelOwner != nil && m.model != nil && m.model.command != nil {
+		_, peak := testProcessMemory(m.model.command.Process.Pid)
+		m.app.testModelPeak = max(m.app.testModelPeak, peak)
+	}
 	m.model.Close()
 	m.model = nil
 }
 func (m *scanModel) end() {
 	m.close()
 	if m.holdsSlot {
-		<-m.app.chat.slot
+		<-m.modelChat().slot
 		m.holdsSlot = false
 	}
 }
 func (m *scanModel) handlers(partial bool) (assessFile, transcribePage) {
-	if partial || m.settings.AI.Model == "off" || m.settings.AI.Invoke == "never" {
-		return nil, nil
+	var dedicatedOCR transcribePage
+	if m.settings.Evidence.UseOCR && m.settings.Evidence.OCREngine == "tesseract" {
+		dedicatedOCR = tesseractPage
 	}
-	return func(ctx context.Context, name string, e evidence) (a assessment, err error) {
-			err = m.call(ctx, len(e.Photo) != 0, func(model *localModel) error {
-				assess := model.assess
-				if m.session.manifest.Operation == scanMove {
-					assess = model.assessTopic
-				}
-				m.capture.RecordEvidence = m.settings.AI.RecordEvidence
-				ctx = context.WithValue(ctx, captureKey{}, &m.capture)
-				a, err = assess(ctx, name, e)
-				return err
-			})
-			return a, err
-		}, func(ctx context.Context, image []byte) (text string, err error) {
-			before := m.startupMS
-			err = m.call(ctx, true, func(model *localModel) error { text, err = model.transcribe(ctx, image); return err })
-			m.ocrLoadMS += m.startupMS - before
-			return text, err
-		}
+	if partial || m.settings.AI.Model == "off" || m.settings.AI.Invoke == "never" {
+		return nil, dedicatedOCR
+	}
+	assess := func(ctx context.Context, name string, e evidence) (a assessment, err error) {
+		err = m.call(ctx, len(e.Photo) != 0, func(model *localModel) error {
+			assess := model.assess
+			if m.session.manifest.Operation == scanMove {
+				assess = model.assessTopic
+			}
+			m.capture.RecordEvidence = m.settings.AI.RecordEvidence
+			ctx = context.WithValue(ctx, captureKey{}, &m.capture)
+			a, err = assess(ctx, name, e)
+			return err
+		})
+		return a, err
+	}
+	if dedicatedOCR != nil {
+		return assess, dedicatedOCR
+	}
+	return assess, func(ctx context.Context, image []byte) (text string, err error) {
+		before := m.startupMS
+		err = m.call(ctx, true, func(model *localModel) error { text, err = model.transcribe(ctx, image); return err })
+		m.ocrLoadMS += m.startupMS - before
+		return text, err
+	}
 }
 func (m *scanModel) timings(i *inspection, partial bool, index int) {
 	if !partial {

@@ -16,6 +16,8 @@ let recommendationKey = "";
 let recommendationRequest;
 let chosenRecommendation = "";
 let recommendationOutcome = "";
+let queuedNameJob = "";
+const queuedNames = new Map();
 
 function selectView(view) {
   currentView = view;
@@ -31,6 +33,7 @@ function selectView(view) {
     el("chat-input").focus();
   }
   if (view === "review") updateReview(latest);
+  if (view === "history") refreshTestHistory();
 }
 
 function leaf(path) { return path?.split(/[\\/]/).at(-1) || ""; }
@@ -213,6 +216,12 @@ function renderReviewControls(state) {
   resetRecommendations(flagged ? reviewRowKey(state,row) : "");
   show("apply", !state.PreviewOnly && (pending || reviewRows.some(item => rowSelectable(item,state))));
   el("apply").disabled = !pending && selectedItems.size === 0;
+  const all = !pending && canReview(state) && !state.PreviewOnly && state.Proposed > 0 &&
+    ["all","proposed","flagged","kept"].includes(reviewFilter);
+  show("apply-all-renames", all);
+  el("apply-all-renames").textContent = reviewFilter === "flagged" ? "Apply all flagged proposals" :
+    reviewFilter === "kept" ? "Apply all proposals for kept files" : "Apply all proposals";
+  updateQueuedNames(state);
   el("apply").textContent = pending ? "Resume applying" : "Apply selected (" + selectedItems.size + ")";
   show("review-pause", state.Busy && ["indexing","starting","files","folders","reassessing","applying","metadata"].includes(state.Phase));
   el("review-pause").disabled = state.Pausing;
@@ -464,6 +473,41 @@ el("recommend-names").onclick = async () => {
   }
 };
 
+function updateQueuedNames(state) {
+  if (queuedNameJob !== state.Job) {
+    queuedNames.clear();
+    queuedNameJob = state.Job;
+  }
+  const count = queuedNames.size;
+  show("apply-all-names", count > 0 && canReview(state) && !state.PreviewOnly);
+  show("clear-queued-names", count > 0);
+  el("apply-all-names").textContent = "Apply all queued names (" + count + ")";
+}
+
+el("apply-all-renames").onclick = () => applyAllProposals(reviewFilter, "", reviewFilter === "flagged" ?
+  "pending flagged proposals" : reviewFilter === "kept" ? "pending proposals for kept files" : "pending proposals across all pages");
+
+el("queue-recommended-name").onclick = () => {
+  const row = activeReviewRow();
+  if (!row || reviewRowKey(latest,row) !== recommendationKey || !chosenRecommendation) return;
+  queuedNames.set(row.Index, {index:row.Index, revision:row.Revision, name:chosenRecommendation});
+  el("recommended-names-status").textContent = "Name queued for this file.";
+  updateQueuedNames(latest);
+};
+el("clear-queued-names").onclick = () => {
+  queuedNames.clear();
+  updateQueuedNames(latest);
+};
+el("apply-all-names").onclick = async () => {
+  const id = latest.Job;
+  const names = [...queuedNames.values()];
+  if (!names.length || !window.confirm("Apply all " + names.length + " queued names?")) return;
+  if (await action("apply-chosen-names", {id, chosenNames:names})) {
+    for (const name of names) queuedNames.delete(name.index);
+    updateQueuedNames(latest);
+  }
+};
+
 el("use-recommended-name").onclick = async () => {
   const row = activeReviewRow();
   const key = row && reviewRowKey(latest,row);
@@ -472,6 +516,10 @@ el("use-recommended-name").onclick = async () => {
   el("use-recommended-name").disabled = true;
   const saved = await action("use-review-name",{id:job,index:row.Index,revision:row.Revision,filename:chosenRecommendation});
   el("use-recommended-name").disabled = false;
+  if (saved) {
+    queuedNames.delete(row.Index);
+    updateQueuedNames(latest);
+  }
   if (saved && latest.Job === job && currentView === "review" && reviewFilter === "flagged") {
     reviewIndex = row.Index;
     resetRecommendations("");

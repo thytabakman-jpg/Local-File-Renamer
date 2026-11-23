@@ -549,3 +549,9 @@ input[type="checkbox"] { accent-color:#a45224; }
 .duplicate-comparison img { display:block; max-width:100%; max-height:55vh; margin:auto; }
 .duplicate-comparison .preview-paper { max-height:55vh; overflow:auto; }
 @media(max-width:650px) { .duplicate-comparison { grid-template-columns:1fr; } }
+
+.test-plan-editor { margin-block: 1rem; }
+.test-plan-editor p { white-space: pre-wrap; }
+.test-plan-editor textarea { display: block; width: 100%; min-height: 12rem; font-family: ui-monospace, monospace; }
+#test-run-list article { padding-block: .75rem; }
+#test-run-list article + article { border-top: 1px solid var(--line, #637083); }

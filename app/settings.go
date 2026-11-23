@@ -29,6 +29,8 @@ type evidenceSettings struct {
 	ExtraPDFPages int    `json:"extra_pdf_pages"`
 	TextBytes     int    `json:"text_bytes"`
 	UseOCR        bool   `json:"use_ocr"`
+	OCRUnresolved bool   `json:"ocr_unresolved"`
+	OCREngine     string `json:"ocr_engine"`
 	OCRPages      int    `json:"ocr_pages"`
 	ImageEdge     int    `json:"image_edge"`
 	DeepenOn      string `json:"deepen_on"`
@@ -88,7 +90,7 @@ func defaultSettings() scanSettings {
 	return scanSettings{
 		Scope:     scanScope{Subfolders: true},
 		Naming:    defaultRules,
-		Evidence:  evidenceSettings{2, 4, 10000, true, 2, 512, "sparse_or_ambiguous", "enabled", false},
+		Evidence:  evidenceSettings{2, 4, 10000, true, false, "local_model", 2, 512, "sparse_or_ambiguous", "enabled", false},
 		AI:        aiSettings{"configured", "", 300, 180, "unresolved", false},
 		Resources: resourceSettings{3, 4, 1, 192, "below_normal"},
 		Recovery:  recoverySettings{"propose_with_warning", 1, 1, 0},
@@ -141,13 +143,15 @@ var settingsSpecs = map[string]settingSpec{
 	"evidence.pdf_pages":           rangeSpec("Initial PDF pages", 1, 12),
 	"evidence.extra_pdf_pages":     rangeSpec("Additional PDF pages", 0, 12),
 	"evidence.text_bytes":          rangeSpec("Text evidence limit in bytes", 512, 10000),
+	"evidence.ocr_engine":          choiceSpec("PDF OCR engine", "local_model", "tesseract"),
+	"evidence.ocr_unresolved":      {Label: "Also try OCR on unresolved PDFs with readable text"},
 	"evidence.use_ocr":             {Label: "Use local OCR for scanned PDFs"},
 	"evidence.ocr_pages":           rangeSpec("OCR pages", 1, 4),
 	"evidence.image_edge":          rangeSpec("Maximum image edge in pixels", 256, 704),
 	"evidence.deepen_on":           choiceSpec("Inspect more PDF pages", "never", "sparse", "sparse_or_ambiguous", "always"),
 	"evidence.media_samples":       {Label: "Sample audio and video locally (requires media tools)"},
 	"evidence.online_dates":        choiceSpec("Online search and publication date lookup", "enabled", "off"),
-	"ai.model":                     choiceSpec("Local model", "configured", "qwen3.5-4b", "qwen2.5-vl-3b", "off"),
+	"ai.model":                     choiceSpec("Local model", "configured", "qwen3.5-4b", "qwen2.5-vl-3b", "qwen3.5-9b", "off"),
 	"ai.record_evidence":           {Label: "Save local model evidence for diagnostic export"},
 	"ai.instructions":              {Label: "Additional local model instructions"},
 	"ai.response_tokens":           rangeSpec("Maximum response tokens", 80, 512),
@@ -371,6 +375,9 @@ func (s *session) settings() scanSettings {
 }
 
 func withOnlineDefault(s scanSettings) scanSettings {
+	if s.Evidence.OCREngine == "" {
+		s.Evidence.OCREngine = "local_model"
+	}
 	if s.Evidence.OnlineDates == "" {
 		s.Evidence.OnlineDates = "enabled"
 	}

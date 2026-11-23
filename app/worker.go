@@ -149,14 +149,15 @@ type preparedEvidence struct {
 	Stamp    stamp
 	Cached   assessmentCache
 	Reused   bool
+	Deepened bool
 	ReadMS   int64
 }
 
 func prepareEvidence(ctx context.Context, path, name, cacheName string, st stamp, vision bool, opts scanSettings) preparedEvidence {
 	if opts.Cache.ReuseEvidence {
 		if c, ok := readCache(cacheName, st); ok && localEvidenceSettings(c.EvidenceConfig) == localEvidenceSettings(opts.Evidence) && c.DecodeMemory == opts.Resources.DecodeMemoryMiB &&
-			(c.OCRModel == "" || c.OCRModel == modelCacheKey(opts.AI.Model) && c.AIConfig == opts.AI) {
-			return preparedEvidence{Evidence: c.Evidence, Stamp: st, Cached: c, Reused: true}
+			(c.OCRModel == "" || opts.Evidence.OCREngine != "tesseract" && c.OCRModel == modelCacheKey(opts.AI.Model) && c.AIConfig == opts.AI) {
+			return preparedEvidence{Evidence: c.Evidence, Stamp: st, Cached: c, Reused: true, Deepened: c.Deepened}
 		}
 	}
 	started := time.Now()
@@ -164,17 +165,34 @@ func prepareEvidence(ctx context.Context, path, name, cacheName string, st stamp
 	sparse := len(e.Text) < 300
 	deepen := opts.Evidence.DeepenOn == "always" || opts.Evidence.DeepenOn == "sparse" && sparse ||
 		opts.Evidence.DeepenOn == "sparse_or_ambiguous" && (sparse || len(e.Text) < 1600 && publicationKind(".pdf", e, assessment{}) == "" || !meaningful(baseName(name)))
-	if strings.EqualFold(extension(path), ".pdf") && deepen && opts.Evidence.ExtraPDFPages > 0 && ctx.Err() == nil {
-		last := opts.Evidence.PDFPages
-		extra := pdfSample(path, last+1, last+opts.Evidence.ExtraPDFPages)
-		if extra.Text != "" {
-			e.Text = chars(strings.TrimSpace(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+extra.Text), opts.Evidence.TextBytes)
-			if len(e.Text) >= 35 {
-				e.Note = ""
-			}
-		}
+	pre := preparedEvidence{Evidence: e, Stamp: st}
+	if deepen {
+		addPDFEvidence(ctx, path, opts, &pre)
 	}
-	return preparedEvidence{Evidence: e, Stamp: st, ReadMS: elapsedMS(started)}
+	pre.ReadMS = elapsedMS(started)
+	return pre
+}
+
+// Read another page range only once. Retain the opening text independently
+// so a later sample cannot suppress it when the folder candidates are ranked.
+func addPDFEvidence(ctx context.Context, path string, opts scanSettings, pre *preparedEvidence) bool {
+	if pre.Deepened || !strings.EqualFold(extension(path), ".pdf") || opts.Evidence.ExtraPDFPages == 0 ||
+		opts.Evidence.DeepenOn == "never" || ctx.Err() != nil {
+		return false
+	}
+	pre.Deepened = true
+	last := opts.Evidence.PDFPages
+	extra := pdfSample(path, last+1, last+opts.Evidence.ExtraPDFPages)
+	if extra.Text == "" {
+		return false
+	}
+	pre.Evidence.FollowupText = chars(extra.Text, opts.Evidence.TextBytes/2)
+	e := &pre.Evidence
+	e.Text = chars(strings.TrimSpace(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+e.FollowupText), opts.Evidence.TextBytes)
+	if len(e.Text) >= 35 {
+		e.Note = ""
+	}
+	return true
 }
 
 func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcribe transcribePage, i int, override string, refresh bool, opts scanSettings, pre *preparedEvidence) (result decision, original stamp, failure error) {
@@ -223,12 +241,18 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 	ocrStatus := cached.OCR
 	var ocrMS int64
 	var ocrErr error
-	if !reused && opts.Evidence.UseOCR && strings.EqualFold(extension(item.Path), ".pdf") && len(e.Text) < 35 && transcribe != nil && ctx.Err() == nil {
+	if !reused && opts.Evidence.UseOCR && strings.EqualFold(extension(item.Path), ".pdf") && transcribe != nil && ctx.Err() == nil &&
+		(len(e.Text) < 35 || opts.Evidence.OCRUnresolved && unresolvedPDF(s, opts, item.Path, name, override, e)) {
 		ocrStart := time.Now()
 		extracted, note, err := scanOCRWithError(ctx, item.Path, transcribe, opts.Evidence.OCRPages)
 		ocrMS, ocrStatus, ocrErr = elapsedMS(ocrStart), note, err
 		if extracted != "" {
-			e.Text, e.Note, ocrStatus = chars(extracted, opts.Evidence.TextBytes), "", "Read sampled pages"
+			if len(e.Text) < 35 {
+				e.Text = chars(extracted, opts.Evidence.TextBytes)
+			} else if !strings.Contains(norm(e.Text), norm(extracted)) {
+				e.Text = chars(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+extracted, opts.Evidence.TextBytes)
+			}
+			e.Note, ocrStatus = "", "Read sampled pages"
 		} else {
 			e.Note = joinNote(e.Note, note)
 		}
@@ -408,6 +432,14 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		d.Note = joinNote(d.Note, s.compareVersionCopies(i, d.Name))
 	}
 	return d, st, ctx.Err()
+}
+
+func unresolvedPDF(s *session, opts scanSettings, path, name, override string, e evidence) bool {
+	if s.manifest.Operation == scanMove {
+		return !s.sortIndex.proposedLocation(path, e, assessment{}, false).Clear
+	}
+	d := decideWithRules(name, e, assessment{}, false, opts.Naming, override)
+	return d.Unknown || d.Note != "" || d.Name == name && d.Outcome != "Name verified"
 }
 
 func folderDecision(ctx context.Context, path string, assess assessFile, s *session) decision {

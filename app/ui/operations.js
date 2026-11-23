@@ -7,6 +7,7 @@ let selectedFolder = "";
 let selectedMove;
 let duplicateView = "exact";
 let duplicateSelections = [];
+let exactRecommendations = [];
 let verifiedGroups = [];
 let verifiedCanRecycle = false;
 let skippedRecommendations = new Set();
@@ -66,6 +67,7 @@ async function updateOperationReview(state) {
       el("operation-status").textContent = summary + (count ? count + " proposed moves" : state.OutcomeReason || "No proposed moves remain") + (state.PreviewOnly ? " · Preview only" : "");
     } else {
       duplicateSelections = [];
+      exactRecommendations = data.Exact || [];
       drawExactDuplicates(data.Exact, data.CanRecycle, state);
       updateDuplicateApproval();
       verifiedGroups = data.Verified || [];
@@ -195,6 +197,9 @@ function drawMoveReview() {
   selectMove(folder?.Proposals?.find(p => p.Index === selectedMove?.Index) || folder?.Proposals?.[0]);
   el("apply-moves").disabled = true;
   el("apply-moves").textContent = "Apply selected moves";
+  const canApply = !latest.PreviewOnly && canReview(latest);
+  show("apply-folder-moves", canApply && Boolean(folder?.Proposals?.length));
+  show("apply-all-moves", canApply && moveFolders.some(item => item.Proposals?.length));
 }
 
 function selectDuplicateView(view) {
@@ -216,7 +221,7 @@ function updateDuplicateApproval() {
   const button = el("accept-duplicate-recommendations");
   show("accept-duplicate-recommendations", duplicateSelections.length > 0);
   button.disabled = recycleBatchRunning || !groups.length;
-  button.textContent = groups.length ? "Accept recommendations (" + groups.length + " groups)" : "Accept recommendations";
+  button.textContent = groups.length ? "Apply selected copies (" + groups.length + " groups)" : "Apply selected copies";
 }
 
 el("accept-duplicate-recommendations").onclick = async () => {
@@ -236,6 +241,8 @@ function updateVerifiedApproval() {
   const button = el("approve-all-verified");
   show("approve-all-verified", verifiedCanRecycle && approvalGroups().length > 0);
   button.disabled = recycleBatchRunning;
+  show("apply-all-duplicates", verifiedCanRecycle && (exactRecommendations.length > 0 || approvalGroups().length > 0));
+  el("apply-all-duplicates").disabled = recycleBatchRunning;
   for (const approve of el("verified-duplicates").querySelectorAll("[data-approve-copy]")) {
     approve.disabled = recycleBatchRunning;
   }
@@ -316,12 +323,14 @@ function drawVerifiedDuplicates(state) {
 
 el("approve-all-verified").onclick = () => confirmVerifiedDuplicates(latest, approvalGroups());
 
-function confirmVerifiedDuplicates(state, groups) {
-  if (recycleBatchRunning || !verifiedCanRecycle || !groups.length) return;
+el("apply-all-duplicates").onclick = () => confirmVerifiedDuplicates(latest, approvalGroups(), exactRecommendations);
+
+function confirmVerifiedDuplicates(state, groups, exact = []) {
+  if (recycleBatchRunning || !verifiedCanRecycle || !groups.length && !exact.length) return;
   const dialog = el("duplicate-approval-dialog");
   const files = el("duplicate-approval-files");
   files.replaceChildren();
-  const selections = groups.map(group => {
+  const selections = [...exact, ...groups].map(group => {
     const keep = group.RecommendedKeeper;
     const copies = group.Members.filter(member => member.Index !== keep);
     const label = document.createElement("p");
@@ -337,21 +346,26 @@ function confirmVerifiedDuplicates(state, groups) {
   });
   dialog.returnValue = "cancel";
   dialog.addEventListener("close", () => {
-    if (dialog.returnValue === "approve") submitDuplicateApproval(state, selections, "recycle-verified-duplicates");
+    if (dialog.returnValue !== "approve") return;
+    if (exact.length) {
+      submitDuplicateApproval(state, selections.slice(0, exact.length), "recycle-all-recommendations", selections.slice(exact.length));
+    } else {
+      submitDuplicateApproval(state, selections, "recycle-verified-duplicates");
+    }
   }, {once: true});
   dialog.showModal();
 }
 
-async function submitDuplicateApproval(state, groups, actionName) {
+async function submitDuplicateApproval(state, groups, actionName, verifiedGroups = []) {
   const {Job, Revision} = state;
   if (recycleBatchRunning || latest.Job !== Job || latest.Revision !== Revision) return;
-  const count = groups.reduce((sum, group) => sum + group.indices.length, 0);
+  const count = [...groups, ...verifiedGroups].reduce((sum, group) => sum + group.indices.length, 0);
   recycleBatchRunning = true;
   el("duplicate-recycle-receipt").textContent = "Checking selected copies before recycling…";
   updateDuplicateApproval();
   updateVerifiedApproval();
   try {
-    const result = await action(actionName, {id:Job, revision:Revision, duplicateGroups:groups});
+    const result = await action(actionName, {id:Job, revision:Revision, duplicateGroups:groups, verifiedGroups});
     if (latest.Job !== Job) return;
     if (!result) {
       el("duplicate-recycle-receipt").textContent = "The recycle request failed. Check the scan results before retrying.";
@@ -582,6 +596,9 @@ function renderComparisonPreview(previews, job, file) {
   }
   load(0);
 }
+
+el("apply-all-moves").onclick = () => applyAllProposals("all", "", "pending moves across all destinations");
+el("apply-folder-moves").onclick = () => applyAllProposals("folder", selectedFolder, "pending moves to " + selectedFolder);
 
 el("apply-moves").onclick = () => {
   const folder = moveFolders.find(item => item.Path === selectedFolder);

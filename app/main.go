@@ -126,6 +126,26 @@ func server(a *application) *http.Server {
 		}
 		return true
 	}
+	mux.HandleFunc("GET /api/apply-all", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		q := r.URL.Query()
+		revision, err := strconv.ParseUint(q.Get("revision"), 10, 64)
+		if err != nil {
+			http.Error(w, "Provide the current proposal revision", http.StatusBadRequest)
+			return
+		}
+		a.mu.Lock()
+		indices, err := a.applyAllIndices(q.Get("job"), revision, q.Get("filter"), q.Get("folder"))
+		a.mu.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		reply(w, map[string]int{"count": len(indices)})
+	})
+	a.registerTestRoutes(mux, auth)
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -135,7 +155,7 @@ func server(a *application) *http.Server {
 			Approve string
 			Reset   bool
 		}
-		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") || json.NewDecoder(http.MaxBytesReader(w, r.Body, 12<<10)).Decode(&req) != nil {
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") || json.NewDecoder(http.MaxBytesReader(w, r.Body, 40<<10)).Decode(&req) != nil {
 			http.Error(w, "Invalid local chat request", 400)
 			return
 		}
@@ -388,7 +408,9 @@ func server(a *application) *http.Server {
 			Fresh                                bool
 			Revision                             *uint64
 			Keep                                 *int
-			DuplicateGroups                      []duplicateSelection
+			DuplicateGroups, VerifiedGroups      []duplicateSelection
+			ChosenNames                          []chosenName
+			Count                                int
 			RowRevisions                         map[int]uint64
 			Rules                                *namingRules
 			Filename                             *string
@@ -442,6 +464,14 @@ func server(a *application) *http.Server {
 				err = a.applySelectionLocked(q.ID, *q.Revision, q.Indices, q.RowRevisions)
 				a.mu.Unlock()
 			}
+		case "apply-all":
+			if q.Revision == nil {
+				err = fmt.Errorf("Provide the current proposal revision")
+			} else {
+				err = a.applyAllReviewed(q.ID, *q.Revision, q.Group, q.Root, q.Count)
+			}
+		case "apply-chosen-names":
+			err = a.applyChosenNames(q.ID, q.ChosenNames)
 		case "change-location":
 			if q.Revision == nil {
 				err = fmt.Errorf("Provide the current proposal revision")
@@ -489,7 +519,7 @@ func server(a *application) *http.Server {
 			}
 		case "apply-one":
 			err = a.applyOneRevision(q.ID, q.Index, q.Revision)
-		case "recycle-duplicates", "recycle-duplicate-groups", "recycle-verified-duplicates":
+		case "recycle-duplicates", "recycle-duplicate-groups", "recycle-verified-duplicates", "recycle-all-recommendations":
 			if !recycleAvailable {
 				err = fmt.Errorf("The Windows Recycle Bin is unavailable")
 				break
@@ -511,7 +541,13 @@ func server(a *application) *http.Server {
 				reply(w, map[string]int{"recycled": count})
 				return
 			}
-			receipt, recycleErr := a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
+			var receipt duplicateRecycleReceipt
+			var recycleErr error
+			if q.Action == "recycle-all-recommendations" {
+				receipt, recycleErr = a.recycleAllRecommendations(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.VerifiedGroups, recycleFile)
+			} else {
+				receipt, recycleErr = a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
+			}
 			message := ""
 			if recycleErr != nil {
 				message = recycleErr.Error()
@@ -541,13 +577,16 @@ func server(a *application) *http.Server {
 			err = openURL(a.home)
 		case "exit":
 			work, picker := a.requestClose()
+			a.testMu.Lock()
+			testDone := a.testDone
+			a.testMu.Unlock()
 			const accepted = "{\"ok\":true}\n"
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set("Content-Length", strconv.Itoa(len(accepted)))
 			_, _ = io.WriteString(w, accepted)
 			_ = http.NewResponseController(w).Flush()
 			go func() {
-				for _, done := range []<-chan struct{}{work, picker} {
+				for _, done := range []<-chan struct{}{work, picker, testDone} {
 					if done != nil {
 						<-done
 					}

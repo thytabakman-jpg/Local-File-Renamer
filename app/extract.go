@@ -30,6 +30,7 @@ import (
 
 type evidence struct {
 	Text, Title, Author, Year, Venue, Publisher, Kind, Note, Summary string
+	FollowupText                                                     string `json:",omitempty"`
 	Photo                                                            []byte
 	ArticleFrontMatter, ArxivFrontMatter                             bool
 	ArxivID                                                          string

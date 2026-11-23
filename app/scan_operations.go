@@ -132,6 +132,9 @@ func (s *session) buildMoveSuggestion(index int, d decision, st stamp, revision 
 		return r
 	}
 	if d.Folder == "" || samePath(d.Folder, filepath.Dir(item.Path)) {
+		if d.Outcome != "" {
+			r.Decision = d.Outcome
+		}
 		return r
 	}
 	if !within(s.manifest.Root, d.Folder) {

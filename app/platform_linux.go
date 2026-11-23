@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -45,4 +47,24 @@ func applyModelPriority(c *exec.Cmd, priority string) {
 
 func nativeFolderPicker(string) (string, error) {
 	return "", errors.New("The native Windows folder picker is available on Windows")
+}
+
+func testProcessMemory(pid int) (resident, peak uint64) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		switch fields[0] {
+		case "VmRSS:":
+			resident, _ = strconv.ParseUint(fields[1], 10, 64)
+		case "VmHWM:":
+			peak, _ = strconv.ParseUint(fields[1], 10, 64)
+		}
+	}
+	return resident * 1024, peak * 1024
 }

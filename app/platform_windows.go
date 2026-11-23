@@ -254,3 +254,26 @@ func nativeFolderPicker(start string) (string, error) {
 	ole.NewProc("CoTaskMemFree").Call(uintptr(unsafe.Pointer(path)))
 	return value, nil
 }
+
+var getProcessMemoryInfo = windows.NewLazySystemDLL("kernel32.dll").NewProc("K32GetProcessMemoryInfo")
+
+func testProcessMemory(pid int) (resident, peak uint64) {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return 0, 0
+	}
+	defer windows.CloseHandle(handle)
+	var info struct {
+		Size, PageFaults   uint32
+		PeakWork, Work     uintptr
+		PeakPaged, Paged   uintptr
+		PeakOther, Other   uintptr
+		PageFile, PeakFile uintptr
+	}
+	info.Size = uint32(unsafe.Sizeof(info))
+	ok, _, _ := getProcessMemoryInfo.Call(uintptr(handle), uintptr(unsafe.Pointer(&info)), uintptr(info.Size))
+	if ok == 0 {
+		return 0, 0
+	}
+	return uint64(info.Work), uint64(info.PeakWork)
+}
