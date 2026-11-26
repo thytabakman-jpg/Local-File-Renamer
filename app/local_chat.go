@@ -331,6 +331,51 @@ func (a *application) prepareChatModel(selection string, opts scanSettings) (*lo
 	return c.model, nil
 }
 
+func (a *application) chatFilteredProposals(plan chatPlan) (chatReply, error) {
+	response := chatReply{}
+	filter := "auto"
+	if plan.Flagged {
+		filter = "flagged"
+	}
+	page, err := a.reviewInspections(max(0, plan.Offset), false, filter)
+	if err != nil {
+		return response, err
+	}
+	for _, row := range page.Rows {
+		from, to, note := row.Path, row.Proposed, row.Note
+		if !plan.Flagged {
+			from, to, note = row.AutomaticFrom, row.AutomaticTo, row.AutomaticReason
+			if row.AutomaticUndone {
+				note = joinNote(note, "Automatic change undone")
+			}
+		}
+		response.Proposals = append(response.Proposals, proposalRow{Index: row.Index, From: from, To: to, Note: note})
+	}
+	label := "flagged"
+	if !plan.Flagged {
+		label = "automatically renamed"
+	}
+	response.Message = fmt.Sprintf("%d %s files. Showing %d.", page.Total, label, len(page.Rows))
+	return response, nil
+}
+
+func (a *application) chatProposalPage(v view, plan chatPlan) (chatReply, error) {
+	response := chatReply{}
+	if v.Operation == scanMove || v.Operation == scanDuplicates {
+		return a.chatResults(v, plan.ExactOnly)
+	}
+	page, err := a.proposalPage(v.Job, max(0, plan.Offset))
+	if err != nil {
+		return response, err
+	}
+	response.Proposals = page.Rows
+	response.Message = fmt.Sprintf("%d proposal(s). The numbers beside the rows identify the files for this run.", page.Total)
+	if page.NextOffset != 0 {
+		response.Message += fmt.Sprintf(" Say “show proposals from offset %d” for the next page.", page.NextOffset)
+	}
+	return response, nil
+}
+
 func (a *application) executeChat(ctx context.Context, plan chatPlan, folder string) (chatReply, error) {
 	v := a.snapshot()
 	response := chatReply{}
@@ -413,42 +458,9 @@ func (a *application) executeChat(ctx context.Context, plan chatPlan, folder str
 		r := report.Receipt
 		response.Message = fmt.Sprintf("%d assessments completed, %d pending, %d skipped, %d failed, and %d files not assessed. %d renames completed and %d pending.", r.Assessments.Completed, r.Assessments.Pending, r.Assessments.Skipped, r.Assessments.Failed, r.NotAssessed, r.Renames.Completed, r.Renames.Pending)
 	case "show_filtered":
-		filter := "auto"
-		if plan.Flagged {
-			filter = "flagged"
-		}
-		page, err := a.reviewInspections(max(0, plan.Offset), false, filter)
-		if err != nil {
-			return response, err
-		}
-		for _, row := range page.Rows {
-			from, to, note := row.Path, row.Proposed, row.Note
-			if !plan.Flagged {
-				from, to, note = row.AutomaticFrom, row.AutomaticTo, row.AutomaticReason
-				if row.AutomaticUndone {
-					note = joinNote(note, "Automatic change undone")
-				}
-			}
-			response.Proposals = append(response.Proposals, proposalRow{Index: row.Index, From: from, To: to, Note: note})
-		}
-		label := "flagged"
-		if !plan.Flagged {
-			label = "automatically renamed"
-		}
-		response.Message = fmt.Sprintf("%d %s files. Showing %d.", page.Total, label, len(page.Rows))
+		return a.chatFilteredProposals(plan)
 	case "proposals":
-		if v.Operation == scanMove || v.Operation == scanDuplicates {
-			return a.chatResults(v, plan.ExactOnly)
-		}
-		page, err := a.proposalPage(v.Job, max(0, plan.Offset))
-		if err != nil {
-			return response, err
-		}
-		response.Proposals = page.Rows
-		response.Message = fmt.Sprintf("%d proposal(s). The numbers beside the rows identify the files for this run.", page.Total)
-		if page.NextOffset != 0 {
-			response.Message += fmt.Sprintf(" Say “show proposals from offset %d” for the next page.", page.NextOffset)
-		}
+		return a.chatProposalPage(v, plan)
 	case "start":
 		return a.startChatScan(v, plan, folder)
 	case "pause":

@@ -254,6 +254,45 @@ func (s *session) close() {
 		_ = s.log.Close()
 	}
 }
+func (s *session) validateRecycleIntent(r record) error {
+	if r.BatchID != "" {
+		batch := s.exactBatches[r.BatchID]
+		if batch == nil || !batch.includes(r.Index) || s.batchRecycled[r.BatchID][r.Index] {
+			return errors.New("recycle request does not match its exact duplicate approval")
+		}
+	}
+	if s.pending != nil || r.Index < s.applyThrough || r.Index >= len(s.plans) || s.autoCompleted[r.Index] ||
+		r.Path != s.manifest.Items[r.Index].Path || r.Stamp.ID == "" || r.Stamp.Dir {
+		return errors.New("recycle request does not match an unapplied file")
+	}
+	return nil
+}
+
+func (s *session) validateApplySelection(r record) error {
+	if len(s.selection) != 0 || len(r.Selection) == 0 {
+		return errors.New("invalid pending selection")
+	}
+	for _, i := range r.Selection {
+		if i < s.applyThrough || i >= len(s.plans) {
+			return errors.New("selection index does not match an assessed item")
+		}
+	}
+	selected := make(map[int]bool)
+	for _, i := range r.Selection {
+		selected[i] = true
+	}
+	for _, override := range r.MoveOverrides {
+		i, move := override.Index, override.Move
+		if s.manifest.Operation != scanMove || !selected[i] || s.plans[i].Move == nil ||
+			move.From != s.plans[i].Move.From || move.Stamp != s.plans[i].Move.Stamp ||
+			!within(s.manifest.Root, move.To) || filepath.Base(move.To) != filepath.Base(move.From) {
+			return errors.New("destination override does not match an approved file")
+		}
+		delete(selected, i)
+	}
+	return nil
+}
+
 func (s *session) validateRecord(r record) error {
 	switch r.Type {
 	case "plan":
@@ -276,43 +315,14 @@ func (s *session) validateRecord(r record) error {
 			return errors.New("invalid exact duplicate approval")
 		}
 	case "recycle-intent":
-		if r.BatchID != "" {
-			batch := s.exactBatches[r.BatchID]
-			if batch == nil || !batch.includes(r.Index) || s.batchRecycled[r.BatchID][r.Index] {
-				return errors.New("recycle request does not match its exact duplicate approval")
-			}
-		}
-		if s.pending != nil || r.Index < s.applyThrough || r.Index >= len(s.plans) || s.autoCompleted[r.Index] ||
-			r.Path != s.manifest.Items[r.Index].Path || r.Stamp.ID == "" || r.Stamp.Dir {
-			return errors.New("recycle request does not match an unapplied file")
-		}
+		return s.validateRecycleIntent(r)
 	case "recycle-result":
 		if s.pending == nil || s.pending.Type != "recycle-intent" || s.pending.Index != r.Index ||
 			s.pending.Path != r.Path || (r.Status != "present" && r.Status != "absent") {
 			return errors.New("recycle result does not match its request")
 		}
 	case "apply-selection":
-		if len(s.selection) != 0 || len(r.Selection) == 0 {
-			return errors.New("invalid pending selection")
-		}
-		for _, i := range r.Selection {
-			if i < s.applyThrough || i >= len(s.plans) {
-				return errors.New("selection index does not match an assessed item")
-			}
-		}
-		selected := make(map[int]bool)
-		for _, i := range r.Selection {
-			selected[i] = true
-		}
-		for _, override := range r.MoveOverrides {
-			i, move := override.Index, override.Move
-			if s.manifest.Operation != scanMove || !selected[i] || s.plans[i].Move == nil ||
-				move.From != s.plans[i].Move.From || move.Stamp != s.plans[i].Move.Stamp ||
-				!within(s.manifest.Root, move.To) || filepath.Base(move.To) != filepath.Base(move.From) {
-				return errors.New("destination override does not match an approved file")
-			}
-			delete(selected, i)
-		}
+		return s.validateApplySelection(r)
 	case "selected-metadata":
 		if len(s.selection) == 0 || r.Index != s.selection[0] || s.plans[r.Index].Metadata == nil {
 			return errors.New("metadata approval does not match the selected item")
