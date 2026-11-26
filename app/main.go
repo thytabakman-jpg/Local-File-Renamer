@@ -146,6 +146,30 @@ func server(a *application) *http.Server {
 		reply(w, map[string]int{"count": len(indices)})
 	})
 	a.registerTestRoutes(mux, auth)
+	a.registerChatRoutes(mux, auth)
+	a.registerPreviewRoutes(mux, auth)
+	mux.HandleFunc("POST /api/bridge", a.bridge)
+	a.registerStatusRoutes(mux, auth)
+	a.registerExportRoutes(mux, auth)
+	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 45 * time.Second, MaxHeaderBytes: 16 << 10}
+	a.registerScanResultRoutes(mux, auth)
+	a.registerActionRoute(mux, auth, srv)
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "127.0.0.1:39173" {
+			http.Error(w, "Local requests only", 403)
+			return
+		}
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		mux.ServeHTTP(w, r)
+	})
+	return srv
+}
+func (a *application) registerChatRoutes(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -188,6 +212,9 @@ func server(a *application) *http.Server {
 		}
 		reply(w, response)
 	})
+}
+
+func (a *application) registerPreviewRoutes(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/file-preview", func(w http.ResponseWriter, r *http.Request) {
 		if auth(w, r) {
 			a.serveFilePreview(w, r)
@@ -211,7 +238,9 @@ func server(a *application) *http.Server {
 		}
 		reply(w, names)
 	})
-	mux.HandleFunc("POST /api/bridge", a.bridge)
+}
+
+func (a *application) registerStatusRoutes(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -331,6 +360,9 @@ func server(a *application) *http.Server {
 		}
 		reply(w, page)
 	})
+}
+
+func (a *application) registerExportRoutes(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	csvDownload := func(w http.ResponseWriter, filename string, export func(*csv.Writer) error) {
 		var data strings.Builder
 		if err := export(csv.NewWriter(&data)); err != nil {
@@ -356,7 +388,9 @@ func server(a *application) *http.Server {
 			csvDownload(w, filename, func(c *csv.Writer) error { return a.exportInspections(c, unknown) })
 		}
 	})
-	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 45 * time.Second, MaxHeaderBytes: 16 << 10}
+}
+
+func (a *application) registerScanResultRoutes(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/compare-duplicates", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -386,6 +420,9 @@ func server(a *application) *http.Server {
 		}
 		reply(w, results)
 	})
+}
+
+func (a *application) registerActionRoute(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool, srv *http.Server) {
 	mux.HandleFunc("POST /api/action", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -605,21 +642,8 @@ func server(a *application) *http.Server {
 		}
 		reply(w, map[string]bool{"ok": true})
 	})
-	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != "127.0.0.1:39173" {
-			http.Error(w, "Local requests only", 403)
-			return
-		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			w.Header().Set("Cache-Control", "no-store")
-		}
-		mux.ServeHTTP(w, r)
-	})
-	return srv
 }
+
 func reply(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(v)

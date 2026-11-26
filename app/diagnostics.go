@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -216,4 +218,78 @@ func keepRows(rows []timingRow, row timingRow, limit int, before func(timingRow,
 		return append(rows, row)
 	}
 	return rows
+}
+
+func csvCell(s string) string {
+	if len(s) > 0 && strings.ContainsRune("=+-@\t\r\n", rune(s[0])) {
+		return "'" + s
+	}
+	return s
+}
+
+func (a *application) exportInspections(w *csv.Writer, unknown bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.s == nil || a.v.Busy && !a.scanActive && a.v.Phase != "reassessing" {
+		return errors.New("The inspection report is unavailable during this operation")
+	}
+	if err := w.Write([]string{"Current path", "Proposed path", "Text or listing", "Metadata", "Image decoded", "Local AI", "Model", "Unknown publication fields", "Read ms", "OCR ms", "Model startup ms", "Local model ms", "Rename ms", "Outcome", "Notes", "Classification", "Naming decision", "Decision reason", "Cache", "AI contribution", "Total ms", "Publication date lookup", "Publication source", "Online lookup ms", "Classification checklist"}); err != nil {
+		return err
+	}
+	for _, r := range a.s.plans {
+		if a.s.manifest.Items[r.Index].Folder || unknown && !r.Unknown {
+			continue
+		}
+		var proposed string
+		if r.Move != nil {
+			proposed = r.Move.To
+		}
+		checked := r.Inspection
+		yesNo := func(b bool) string {
+			if b {
+				return "Yes"
+			}
+			return "No"
+		}
+		if checked.AI == "" {
+			checked.AI = "Not recorded"
+		}
+		outcome, note, renameMS := planOutcome(r), r.Note, int64(0)
+		if result, ok := a.s.outcomes[r.Index]; ok {
+			outcome, note, renameMS = result.Status, result.Note, result.RenameMS
+		}
+		if err := w.Write([]string{csvCell(a.s.currentPath(r.Path, r.Index)), csvCell(proposed),
+			yesNo(checked.Text), yesNo(checked.Metadata), yesNo(checked.Image), checked.AI, checked.Model, yesNo(r.Unknown),
+			strconv.FormatInt(checked.ReadMS, 10), strconv.FormatInt(checked.OCRMS, 10), strconv.FormatInt(checked.StartupMS, 10), strconv.FormatInt(checked.ModelMS, 10),
+			strconv.FormatInt(renameMS, 10), csvCell(outcome), csvCell(note), csvCell(r.Kind), csvCell(planOutcome(r)), csvCell(r.Reason), csvCell(checked.Cache), csvCell(checked.AIContribution), strconv.FormatInt(checked.TotalMS, 10), csvCell(checked.PublicationDate), csvCell(checked.PublicationSource), strconv.FormatInt(checked.OnlineMS, 10), csvCell(checklistText(checked.Checklist))}); err != nil {
+			return err
+		}
+	}
+	w.Flush()
+	return w.Error()
+}
+
+func (a *application) export(w *csv.Writer) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.v.Busy {
+		return errors.New("Pause the run before exporting flags")
+	}
+	if a.s == nil {
+		return errors.New("There is no run to export")
+	}
+	if err := w.Write([]string{"Current path", "Action", "Reason"}); err != nil {
+		return err
+	}
+	for _, r := range a.s.flagRows() {
+		status := r.Status
+		if r.Type == "plan" {
+			status = "Review"
+		}
+		if err := w.Write([]string{csvCell(a.s.currentPath(r.Path, r.Index)), status, csvCell(r.Note)}); err != nil {
+			return err
+		}
+	}
+	w.Flush()
+	return w.Error()
 }

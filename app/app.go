@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,34 +16,6 @@ type job struct {
 	ID, Root, Date string
 	Operation      scanOperation
 }
-type proposalRow struct {
-	Index                  int
-	Revision               uint64 `json:",omitempty"`
-	From, To, Note         string
-	Kind, Reason, Decision string
-	Draft                  bool
-	Metadata               *metadataEdit
-}
-type inspectionRow struct {
-	Path, Proposed, Note                        string
-	AutomaticFrom, AutomaticTo, AutomaticReason string
-	AutomaticUndone                             bool
-	Index                                       int
-	Revision                                    uint64 `json:",omitempty"`
-	Kind, Reason, Decision                      string
-	Inspection                                  inspection
-	Unknown                                     bool
-	ReviewActions, Refinement                   bool          `json:",omitempty"`
-	Metadata                                    *metadataEdit `json:",omitempty"`
-	RenameMS                                    int64
-	Outcome                                     string
-}
-type inspectionPage struct {
-	Job   string
-	Rows  []inspectionRow
-	Total int
-}
-
 type view struct {
 	Inventory                                                               *inventoryCounts
 	ScopeDescription                                                        string
@@ -664,77 +634,6 @@ func (a *application) run(ctx context.Context, s *session, partial bool) {
 	a.finish(failure)
 }
 
-func (a *application) previewPage(offset int) ([]proposalRow, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.previewPageLocked(offset)
-}
-
-type proposalPage struct {
-	Job               string
-	Revision          uint64
-	Total, NextOffset int
-	Rows              []proposalRow
-}
-
-func (a *application) proposalPage(id string, offset int) (proposalPage, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if id != "" && id != a.v.Job {
-		return proposalPage{}, errors.New("The selected run changed")
-	}
-	rows, err := a.previewPageLocked(offset)
-	if err != nil {
-		return proposalPage{}, err
-	}
-	total := a.s.reviewCount() + len(a.cleanup) - a.cleanupThrough
-	next := offset + len(rows)
-	if next >= total || len(rows) == 0 {
-		next = 0
-	}
-	return proposalPage{Job: a.v.Job, Revision: a.s.planRevision, Total: total, NextOffset: next, Rows: rows}, nil
-}
-
-func (a *application) previewPageLocked(offset int) ([]proposalRow, error) {
-	if a.s == nil || a.v.Busy && !a.scanActive || !a.scanActive && (a.v.Phase != "preview" && a.v.Phase != "paused" && a.v.Phase != "complete") || a.s.pending != nil || a.s.automaticRenamePending() {
-		return nil, errors.New("No preview is available")
-	}
-	rows := make([]proposalRow, 0, 100)
-	for _, plan := range a.s.plans[a.s.applyThrough:a.s.reviewEnd()] {
-		hasRename := plan.Move != nil && !a.s.autoCompleted[plan.Index]
-		if !a.s.reviewable(plan) {
-			continue
-		}
-		if offset > 0 {
-			offset--
-			continue
-		}
-		row := proposalRow{Index: plan.Index, Revision: a.s.planVersions[plan.Index], From: a.s.currentPath(plan.Path, plan.Index), Note: plan.Note, Metadata: plan.Metadata, Kind: plan.Kind, Reason: plan.Reason, Decision: planOutcome(plan)}
-		if hasRename {
-			row.To = plan.Move.To
-			if a.s.manifest.Auto && photoExtension(plan.Path) && !a.s.canAutoApply(plan) {
-				if plan.Auto && !a.s.autoHeld[plan.Index] {
-					row.Reason = joinNote(row.Reason, "Enable this category for automatic changes or review it manually")
-				} else {
-					row.Reason = joinNote(row.Reason, "Review required before this image name can be applied")
-				}
-			}
-			if failure := a.s.outcomes[plan.Index]; failure.Type == "single-failed" || failure.Type == "automatic-failed" {
-				row.Note = failure.Note
-			}
-		}
-		rows = append(rows, row)
-		if len(rows) == 100 {
-			break
-		}
-	}
-	if a.scanActive && len(rows) < 100 {
-		start := min(len(a.cleanup), a.cleanupThrough+offset)
-		rows = append(rows, a.cleanup[start:min(len(a.cleanup), start+100-len(rows))]...)
-	}
-	return rows, nil
-}
-
 func (a *application) apply(id string, start, end int, excluded []int) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -919,145 +818,3 @@ func (a *application) undoLocked() error {
 	return nil
 }
 
-func (a *application) inspections(offset int, unknown bool) (inspectionPage, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.inspectionPageLocked(offset, unknown)
-}
-
-func (a *application) reviewInspections(offset int, unknown bool, filter string) (inspectionPage, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.inspectionPageFiltered(offset, unknown, filter)
-}
-
-func (a *application) inspectionPageLocked(offset int, unknown bool) (inspectionPage, error) {
-	return a.inspectionPageFiltered(offset, unknown, "")
-}
-
-func (a *application) inspectionPageFiltered(offset int, unknown bool, filter string) (inspectionPage, error) {
-	page := inspectionPage{Job: a.v.Job, Rows: make([]inspectionRow, 0, 100)}
-	if a.s == nil || a.v.Busy && !a.scanActive && a.v.Phase != "reassessing" {
-		return page, errors.New("The inspection report is unavailable during this operation")
-	}
-	for _, r := range a.s.plans {
-		if a.s.manifest.Items[r.Index].Folder || unknown && !r.Unknown {
-			continue
-		}
-		if !reviewMatches(a.s, r, filter) {
-			continue
-		}
-		if page.Total >= offset && len(page.Rows) < 100 {
-			row := inspectionRow{Path: a.s.currentPath(r.Path, r.Index), Note: r.Note, Unknown: r.Unknown, Inspection: r.Inspection, Index: r.Index, Revision: a.s.planVersions[r.Index], Kind: r.Kind, Reason: r.Reason, Decision: planOutcome(r)}
-			if filter == "flagged" || filter == "auto" || filter == "all" {
-				_, _, err := a.flaggedFile(a.v.Job, a.v.Revision, r.Index)
-				row.ReviewActions = err == nil
-				row.Refinement = a.s.canRefine(r.Index)
-				if a.s.reviewable(r) {
-					row.Metadata = r.Metadata
-				}
-			}
-			if automatic, ok := a.s.automaticMoves[r.Index]; ok {
-				row.AutomaticFrom, row.AutomaticTo = automatic.move.From, automatic.move.To
-				row.AutomaticReason = automatic.reason
-				row.AutomaticUndone = automatic.position >= len(a.s.moves)-a.s.undoCount
-			}
-			row.Outcome = planOutcome(r)
-			if result, ok := a.s.outcomes[r.Index]; ok {
-				row.RenameMS, row.Outcome = result.RenameMS, result.Status
-				row.Note = joinNote(r.Note, result.Note)
-			}
-			if r.Move != nil && (!a.s.autoCompleted[r.Index] || a.s.byItem[r.Index].move.To != r.Move.To) {
-				row.Proposed = r.Move.To
-			}
-			page.Rows = append(page.Rows, row)
-		}
-		page.Total++
-	}
-	if filter == "all" || filter == "unassessed" {
-		for index := len(a.s.plans); index < a.s.fileCount; index++ {
-			if page.Total >= offset && len(page.Rows) < 100 {
-				item := a.s.manifest.Items[index]
-				page.Rows = append(page.Rows, inspectionRow{Path: item.Path, Index: index,
-					Decision: "Not assessed", Outcome: "Not assessed", Reason: "Waiting for assessment"})
-			}
-			page.Total++
-		}
-	}
-
-	return page, nil
-}
-
-func csvCell(s string) string {
-	if len(s) > 0 && strings.ContainsRune("=+-@\t\r\n", rune(s[0])) {
-		return "'" + s
-	}
-	return s
-}
-
-func (a *application) exportInspections(w *csv.Writer, unknown bool) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.s == nil || a.v.Busy && !a.scanActive && a.v.Phase != "reassessing" {
-		return errors.New("The inspection report is unavailable during this operation")
-	}
-	if err := w.Write([]string{"Current path", "Proposed path", "Text or listing", "Metadata", "Image decoded", "Local AI", "Model", "Unknown publication fields", "Read ms", "OCR ms", "Model startup ms", "Local model ms", "Rename ms", "Outcome", "Notes", "Classification", "Naming decision", "Decision reason", "Cache", "AI contribution", "Total ms", "Publication date lookup", "Publication source", "Online lookup ms", "Classification checklist"}); err != nil {
-		return err
-	}
-	for _, r := range a.s.plans {
-		if a.s.manifest.Items[r.Index].Folder || unknown && !r.Unknown {
-			continue
-		}
-		var proposed string
-		if r.Move != nil {
-			proposed = r.Move.To
-		}
-		checked := r.Inspection
-		yesNo := func(b bool) string {
-			if b {
-				return "Yes"
-			}
-			return "No"
-		}
-		if checked.AI == "" {
-			checked.AI = "Not recorded"
-		}
-		outcome, note, renameMS := planOutcome(r), r.Note, int64(0)
-		if result, ok := a.s.outcomes[r.Index]; ok {
-			outcome, note, renameMS = result.Status, result.Note, result.RenameMS
-		}
-		if err := w.Write([]string{csvCell(a.s.currentPath(r.Path, r.Index)), csvCell(proposed),
-			yesNo(checked.Text), yesNo(checked.Metadata), yesNo(checked.Image), checked.AI, checked.Model, yesNo(r.Unknown),
-			strconv.FormatInt(checked.ReadMS, 10), strconv.FormatInt(checked.OCRMS, 10), strconv.FormatInt(checked.StartupMS, 10), strconv.FormatInt(checked.ModelMS, 10),
-			strconv.FormatInt(renameMS, 10), csvCell(outcome), csvCell(note), csvCell(r.Kind), csvCell(planOutcome(r)), csvCell(r.Reason), csvCell(checked.Cache), csvCell(checked.AIContribution), strconv.FormatInt(checked.TotalMS, 10), csvCell(checked.PublicationDate), csvCell(checked.PublicationSource), strconv.FormatInt(checked.OnlineMS, 10), csvCell(checklistText(checked.Checklist))}); err != nil {
-			return err
-		}
-	}
-	w.Flush()
-	return w.Error()
-}
-
-func (a *application) export(w *csv.Writer) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.v.Busy {
-		return errors.New("Pause the run before exporting flags")
-	}
-	if a.s == nil {
-		return errors.New("There is no run to export")
-	}
-	if err := w.Write([]string{"Current path", "Action", "Reason"}); err != nil {
-		return err
-	}
-	for _, r := range a.s.flagRows() {
-		status := r.Status
-		if r.Type == "plan" {
-			status = "Review"
-		}
-		if err := w.Write([]string{csvCell(a.s.currentPath(r.Path, r.Index)), status, csvCell(r.Note)}); err != nil {
-			return err
-		}
-	}
-	w.Flush()
-	return w.Error()
-}
