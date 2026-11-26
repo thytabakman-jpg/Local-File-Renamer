@@ -502,24 +502,6 @@ func folderDecision(ctx context.Context, path string, assess assessFile, s *sess
 	return decision{Name: makeName([]string{a.Label}, ""), Inspection: inspection{AI: "Used", ModelMS: elapsedMS(start)}}
 }
 
-func (s *session) currentPath(path string, index int) string {
-	active := len(s.moves) - s.undoCount
-	if im, ok := s.byItem[index]; ok {
-		path = im.move.To
-		for position := im.position; position >= active; position-- {
-			if candidate := s.moves[position]; candidate.To == path {
-				path = candidate.From
-			}
-		}
-	}
-	for p := filepath.Dir(path); p != s.manifest.Root && p != filepath.Dir(p); p = filepath.Dir(p) {
-		if im, ok := s.folderByPath[p]; ok && im.position < active {
-			path = im.move.To + strings.TrimPrefix(path, p)
-		}
-	}
-	return path
-}
-
 func prefetchEvidence(ctx context.Context, s *session, start int, opts scanSettings, vision bool) map[int]preparedEvidence {
 	end := min(s.fileCount, start+opts.Resources.Workers)
 	out := make(map[int]preparedEvidence)

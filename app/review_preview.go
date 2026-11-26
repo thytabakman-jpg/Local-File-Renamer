@@ -378,3 +378,24 @@ func reviewMatches(s *session, row record, filter string) bool {
 		return true
 	}
 }
+
+func (s *session) reviewEnd() int {
+	if len(s.plans) == len(s.manifest.Items) {
+		return len(s.plans)
+	}
+	return min(len(s.plans), s.fileCount)
+}
+
+func (s *session) reviewable(plan record) bool {
+	return plan.Metadata != nil && !s.metadataApproved(plan.Index) || plan.Move != nil && !s.autoCompleted[plan.Index]
+}
+
+func (s *session) reviewCount() int {
+	count := 0
+	for i := s.applyThrough; i < s.reviewEnd(); i++ {
+		if s.reviewable(s.plans[i]) {
+			count++
+		}
+	}
+	return count
+}

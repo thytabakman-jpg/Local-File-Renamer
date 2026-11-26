@@ -586,43 +586,11 @@ func (a *application) executeHTTPAction(w http.ResponseWriter, r *http.Request, 
 	case "apply-one":
 		err = a.applyOneRevision(q.ID, q.Index, q.Revision)
 	case "recycle-duplicates", "recycle-duplicate-groups", "recycle-verified-duplicates", "recycle-all-recommendations":
-		if !recycleAvailable {
-			err = fmt.Errorf("The Windows Recycle Bin is unavailable")
-			break
-		}
-		if q.Revision == nil {
-			err = fmt.Errorf("Confirm copies from the current duplicate scan")
-			break
-		}
-		if q.Action == "recycle-duplicates" {
-			if q.Keep == nil {
-				err = fmt.Errorf("Choose a file to keep")
-				break
-			}
-			count, recycleErr := a.recycleMatchedCopies(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices, recycleFile)
-			if recycleErr != nil {
-				err = fmt.Errorf("%d recycled. %w", count, recycleErr)
-				break
-			}
-			reply(w, map[string]int{"recycled": count})
+		var handled bool
+		handled, err = a.recycleAction(w, r, q)
+		if handled {
 			return
 		}
-		var receipt duplicateRecycleReceipt
-		var recycleErr error
-		if q.Action == "recycle-all-recommendations" {
-			receipt, recycleErr = a.recycleAllRecommendations(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.VerifiedGroups, recycleFile)
-		} else {
-			receipt, recycleErr = a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
-		}
-		message := ""
-		if recycleErr != nil {
-			message = recycleErr.Error()
-		}
-		reply(w, struct {
-			duplicateRecycleReceipt
-			Error string
-		}{receipt, message})
-		return
 	case "recycle-file":
 		if q.Revision == nil || len(q.Indices) != 1 {
 			err = fmt.Errorf("Confirm one file from the current review")
@@ -652,6 +620,47 @@ func (a *application) executeHTTPAction(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	reply(w, map[string]bool{"ok": true})
+}
+
+func (a *application) recycleAction(w http.ResponseWriter, r *http.Request, q httpActionRequest) (bool, error) {
+	var err error
+	if !recycleAvailable {
+		err = fmt.Errorf("The Windows Recycle Bin is unavailable")
+		return false, err
+	}
+	if q.Revision == nil {
+		err = fmt.Errorf("Confirm copies from the current duplicate scan")
+		return false, err
+	}
+	if q.Action == "recycle-duplicates" {
+		if q.Keep == nil {
+			err = fmt.Errorf("Choose a file to keep")
+			return false, err
+		}
+		count, recycleErr := a.recycleMatchedCopies(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices, recycleFile)
+		if recycleErr != nil {
+			err = fmt.Errorf("%d recycled. %w", count, recycleErr)
+			return false, err
+		}
+		reply(w, map[string]int{"recycled": count})
+		return true, nil
+	}
+	var receipt duplicateRecycleReceipt
+	var recycleErr error
+	if q.Action == "recycle-all-recommendations" {
+		receipt, recycleErr = a.recycleAllRecommendations(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.VerifiedGroups, recycleFile)
+	} else {
+		receipt, recycleErr = a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
+	}
+	message := ""
+	if recycleErr != nil {
+		message = recycleErr.Error()
+	}
+	reply(w, struct {
+		duplicateRecycleReceipt
+		Error string
+	}{receipt, message})
+	return true, nil
 }
 
 func reply(w http.ResponseWriter, v any) {
