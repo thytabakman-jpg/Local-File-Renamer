@@ -99,11 +99,15 @@ func server(a *application) *http.Server {
 	aFS, _ := fs.Sub(assets, "ui")
 	mux := http.NewServeMux()
 	static := http.FileServer(http.FS(aFS))
+	index, _ := fs.ReadFile(aFS, "index.html")
+	indexHTML := strings.ReplaceAll(string(index), "{{APP_VERSION}}", appVersion)
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "Local File Renamer v"+appVersion) })
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.SetCookie(w, &http.Cookie{Name: "local_renamer", Value: nonce, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 			w.Header().Set("Cache-Control", "no-store")
+			http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(indexHTML))
+			return
 		}
 		switch r.URL.Path {
 		case "/app.js", "/chat.js", "/operations.js", "/review.js", "/console.js":

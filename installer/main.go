@@ -3,8 +3,6 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -93,40 +91,9 @@ func oldVersionRunning() bool {
 }
 
 func unpack(dir string) error {
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	z, err := zip.NewReader(bytes.NewReader(payload), int64(len(payload)))
-	if err != nil {
-		return err
-	}
-	for _, f := range z.File {
-		if !filepath.IsLocal(filepath.FromSlash(f.Name)) || f.FileInfo().IsDir() || !f.Mode().IsRegular() {
-			return fmt.Errorf("unexpected installer entry: %s", f.Name)
-		}
-		path := filepath.Join(dir, filepath.FromSlash(f.Name))
-		if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			return err
-		}
-		if err = extract(f, path); err != nil {
-			return err
-		}
-	}
-	return nil
+	return unpackArchive(dir, payload)
 }
-func extract(f *zip.File, path string) error {
-	src, err := f.Open()
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dest, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(dest, src)
-	return errors.Join(copyErr, dest.Close())
-}
+
 func child(name string, args ...string) *exec.Cmd {
 	c := exec.Command(name, args...)
 	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
@@ -147,15 +114,29 @@ $link.Save()
 }
 func ensureCRT(dir string) error {
 	exe := filepath.Join(dir, "engine", "llama-server.exe")
-	c := child(exe, "--version")
-	c.Dir = filepath.Dir(exe)
-	if c.Run() == nil {
+	if engineStarts(exe) {
 		return nil
 	}
 	if dialog("The local AI engine could not start. Install Microsoft's Visual C++ runtime now? Windows may ask for administrator permission.", 0x34) != 6 {
 		return errors.New("You can still choose Run without local AI. Microsoft’s Visual C++ x64 runtime is required for local AI on this PC.")
 	}
-	c = child("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `
+	if err := installCRT(); err != nil {
+		return err
+	}
+	if !engineStarts(exe) {
+		return errors.New("Restart Windows and try Local AI. Run without local AI is also available.")
+	}
+	return nil
+}
+
+func engineStarts(exe string) bool {
+	c := child(exe, "--version")
+	c.Dir = filepath.Dir(exe)
+	return c.Run() == nil
+}
+
+func installCRT() error {
+	c := child("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `
 $ErrorActionPreference = 'Stop'
 $p = Join-Path ([IO.Path]::GetTempPath()) ('vc_redist.' + [Guid]::NewGuid().ToString('N') + '.x64.exe')
 try {
@@ -170,12 +151,7 @@ try {
 } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
 `)
 	if out, err := c.CombinedOutput(); err != nil {
-		return fmt.Errorf("Microsoft runtime setup did not complete: %s", strings.TrimSpace(string(out)))
-	}
-	c = child(exe, "--version")
-	c.Dir = filepath.Dir(exe)
-	if c.Run() != nil {
-		return errors.New("Restart Windows and try Local AI. Run without local AI is also available.")
+		return fmt.Errorf("Microsoft runtime setup did not complete: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

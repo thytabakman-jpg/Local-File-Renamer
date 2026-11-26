@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"localrenamer/internal/version"
 )
 
 const bridgeURL = "http://127.0.0.1:39173/api/bridge"
@@ -61,7 +63,7 @@ type bridgeCommand struct {
 	MediaSamples  *bool                      `json:"media_samples,omitempty"`
 }
 
-const appVersion = "4.0"
+const appVersion = version.Current
 const bridgeVersion = 4
 const bridgeResponseLimit = 512 << 10
 
