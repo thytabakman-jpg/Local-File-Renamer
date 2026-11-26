@@ -225,3 +225,25 @@ func (a *application) recommendedNames(ctx context.Context, id string, revision 
 	}
 	return names, nil
 }
+
+func (s *session) liveFlags() []record {
+	rows := make([]record, 0, 100)
+	for i := len(s.planFlags) - 1; i >= 0 && len(rows) < 100; i-- {
+		plan := s.planFlags[i]
+		if plan.Index >= s.index && !s.autoCompleted[plan.Index] {
+			rows = append(rows, plan)
+		}
+	}
+	return rows
+}
+
+func (s *session) flagRows() []record {
+	resolved := s.index
+	flags := append([]record(nil), s.flags...)
+	for _, r := range s.planFlags {
+		if r.Index >= resolved && !s.autoCompleted[r.Index] {
+			flags = append(flags, r)
+		}
+	}
+	return flags
+}
