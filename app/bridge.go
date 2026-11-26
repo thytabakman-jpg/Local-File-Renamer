@@ -61,7 +61,7 @@ type bridgeCommand struct {
 	MediaSamples  *bool                      `json:"media_samples,omitempty"`
 }
 
-const appVersion = "3.6"
+const appVersion = "4.0"
 const bridgeVersion = 4
 const bridgeResponseLimit = 512 << 10
 

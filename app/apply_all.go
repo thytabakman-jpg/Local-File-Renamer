@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -39,23 +38,6 @@ func (a *application) applyAllIndices(id string, revision uint64, filter, folder
 		indices = append(indices, i)
 	}
 	return indices, nil
-}
-
-func reviewMatches(s *session, row record, filter string) bool {
-	decision := planOutcome(row)
-	switch filter {
-	case "kept":
-		return decision == "Name verified" || decision == "Kept existing name" || strings.HasPrefix(decision, "Name kept")
-	case "auto":
-		_, ok := s.automaticMoves[row.Index]
-		return ok
-	case "flagged":
-		return flaggedPlan(row) || s.canRefine(row.Index) || strings.Contains(s.outcomes[row.Index].Note, "Rename failed:")
-	case "unassessed":
-		return decision == "Not assessed"
-	default:
-		return true
-	}
 }
 
 func (a *application) applyAllReviewed(id string, revision uint64, filter, folder string, count int) error {
@@ -114,50 +96,3 @@ func (a *application) applyChosenNames(id string, names []chosenName) error {
 	return a.applySelectionLocked(id, a.v.Revision, indices, nil)
 }
 
-func (a *application) recycleAllRecommendations(ctx context.Context, job string, revision uint64,
-	exact, verified []duplicateSelection, recycle func(string) error) (duplicateRecycleReceipt, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	s := a.s
-	if s == nil || job != a.v.Job || revision != a.v.Revision || a.v.Busy || a.v.Closing || s.pending != nil ||
-		s.manifest.Operation != scanDuplicates || a.v.PreviewOnly || len(exact)+len(verified) == 0 {
-		return duplicateRecycleReceipt{}, errors.New("Review the current duplicate recommendations before applying")
-	}
-	result := s.duplicateResults()
-	approved := func(selections []duplicateSelection, groups []duplicateGroup) bool {
-		known := make(map[int]duplicateGroup, len(groups))
-		for _, group := range groups {
-			known[group.RecommendedKeeper] = group
-		}
-		for _, sel := range selections {
-			group, ok := known[sel.Keep]
-			if !ok || len(sel.Indices) != len(group.Members)-1 {
-				return false
-			}
-			delete(known, sel.Keep)
-			members := make(map[int]bool, len(group.Members))
-			for _, member := range group.Members {
-				members[member.Index] = member.Index != sel.Keep
-			}
-			for _, index := range sel.Indices {
-				if !members[index] {
-					return false
-				}
-				delete(members, index)
-			}
-		}
-		return true
-	}
-	if !approved(exact, result.Exact) || !approved(verified, result.Verified) {
-		return duplicateRecycleReceipt{}, errors.New("A listed duplicate recommendation changed")
-	}
-	defer a.syncSession(true)
-	r, err := s.recycleCopies(ctx, exact, false, "", recycle)
-	if err != nil {
-		return r, err
-	}
-	second, err := s.recycleCopies(ctx, verified, true, "", recycle)
-	r.Groups = append(r.Groups, second.Groups...)
-	r.Recycled += second.Recycled
-	return r, err
-}

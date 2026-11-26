@@ -9,7 +9,7 @@ import (
 func TestInstallRefreshesTargetAtTheSameLauncherPath(t *testing.T) {
 	programs := t.TempDir()
 	dir := filepath.Join(programs, Directory)
-	for _, version := range []string{"Local File Renamer 3.5-test", "Local File Renamer 3.6-test"} {
+	for _, version := range []string{"Local File Renamer 3.6-test", "Local File Renamer 4.0-test"} {
 		installDir := filepath.Join(programs, version)
 		if err := os.Mkdir(installDir, 0700); err != nil {
 			t.Fatal(err)
@@ -27,7 +27,7 @@ func TestInstallRefreshesTargetAtTheSameLauncherPath(t *testing.T) {
 		}
 	}
 	actual, err := os.ReadFile(filepath.Join(dir, Executable))
-	if err != nil || string(actual) != "Local File Renamer 3.5-test" {
+	if err != nil || string(actual) != "Local File Renamer 3.6-test" {
 		t.Fatalf("fixed launcher was not preserved: %q (%v)", actual, err)
 	}
 }

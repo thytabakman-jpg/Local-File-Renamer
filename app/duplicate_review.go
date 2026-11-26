@@ -382,3 +382,51 @@ func (s *session) recycleCopies(ctx context.Context, groups []duplicateSelection
 	}
 	return receipt, nil
 }
+
+func (a *application) recycleAllRecommendations(ctx context.Context, job string, revision uint64,
+	exact, verified []duplicateSelection, recycle func(string) error) (duplicateRecycleReceipt, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.s
+	if s == nil || job != a.v.Job || revision != a.v.Revision || a.v.Busy || a.v.Closing || s.pending != nil ||
+		s.manifest.Operation != scanDuplicates || a.v.PreviewOnly || len(exact)+len(verified) == 0 {
+		return duplicateRecycleReceipt{}, errors.New("Review the current duplicate recommendations before applying")
+	}
+	result := s.duplicateResults()
+	approved := func(selections []duplicateSelection, groups []duplicateGroup) bool {
+		known := make(map[int]duplicateGroup, len(groups))
+		for _, group := range groups {
+			known[group.RecommendedKeeper] = group
+		}
+		for _, sel := range selections {
+			group, ok := known[sel.Keep]
+			if !ok || len(sel.Indices) != len(group.Members)-1 {
+				return false
+			}
+			delete(known, sel.Keep)
+			members := make(map[int]bool, len(group.Members))
+			for _, member := range group.Members {
+				members[member.Index] = member.Index != sel.Keep
+			}
+			for _, index := range sel.Indices {
+				if !members[index] {
+					return false
+				}
+				delete(members, index)
+			}
+		}
+		return true
+	}
+	if !approved(exact, result.Exact) || !approved(verified, result.Verified) {
+		return duplicateRecycleReceipt{}, errors.New("A listed duplicate recommendation changed")
+	}
+	defer a.syncSession(true)
+	r, err := s.recycleCopies(ctx, exact, false, "", recycle)
+	if err != nil {
+		return r, err
+	}
+	second, err := s.recycleCopies(ctx, verified, true, "", recycle)
+	r.Groups = append(r.Groups, second.Groups...)
+	r.Recycled += second.Recycled
+	return r, err
+}
