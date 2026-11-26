@@ -17,12 +17,16 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
+// Section: Metadata contracts and format constants.
+
 const dcNamespace = "http://purl.org/dc/elements/1.1/"
 const maxMetadataFileSize = 128 << 20
 
 type metadataEdit struct {
 	Title, Author, OldTitle, OldAuthor string
 }
+
+// Section: Metadata evidence and suggested edits.
 
 var labelledTitle = regexp.MustCompile(`(?im)^\s*title:[ \t]*([^\n]+)`)
 var labelledAuthor = regexp.MustCompile(`(?im)^\s*(?:author(?:s)?|written by):[ \t]*([^\n]+)`)
@@ -106,6 +110,8 @@ func suggestMetadata(name string, e evidence, a assessment) *metadataEdit {
 	return &metadataEdit{Title: title, Author: author, OldTitle: e.Title, OldAuthor: e.Author}
 }
 
+// Section: Format dispatch and metadata rewriting.
+
 func rewriteMetadata(original, extensionHint string, stage *os.File, edit *metadataEdit) (err error) {
 	defer func() {
 		if recover() != nil {
@@ -135,6 +141,8 @@ func rewriteMetadata(original, extensionHint string, stage *os.File, edit *metad
 	}
 	return stage.Sync()
 }
+
+// Section: PDF metadata rewriting.
 
 func rewritePDF(path string, out *os.File, edit *metadataEdit) error {
 	f, err := os.Open(path)
@@ -200,6 +208,8 @@ func rewritePDF(path string, out *os.File, edit *metadataEdit) error {
 	ctx.Write.IncrementWithObjNr(ctx.Info.ObjectNumber.Value())
 	return api.WriteIncr(ctx, out, conf)
 }
+
+// Section: Office package metadata rewriting.
 
 func rewriteOffice(path string, out io.Writer, edit *metadataEdit) error {
 	z, err := zip.OpenReader(path)
@@ -321,4 +331,22 @@ func dcProperty(name, value string) string {
 	var text bytes.Buffer
 	_ = xml.EscapeText(&text, []byte(value))
 	return fmt.Sprintf("<dc:%s xmlns:dc=%q>%s</dc:%s>", name, dcNamespace, text.String(), name)
+}
+
+// Section: Scan metadata proposal finalization.
+
+func finalizeScanMetadata(s *session, name string, e evidence, a assessment, d decision) decision {
+	if s.manifest.RepairMetadata {
+		d.Metadata = suggestMetadata(name, e, a)
+		if d.Metadata != nil && d.Metadata.Title != "" {
+			d.Metadata.Title = readableTitle(d.Metadata.Title)
+			if d.Metadata.Title == d.Metadata.OldTitle {
+				d.Metadata.Title = ""
+			}
+			if d.Metadata.Title == "" && d.Metadata.Author == "" {
+				d.Metadata = nil
+			}
+		}
+	}
+	return d
 }

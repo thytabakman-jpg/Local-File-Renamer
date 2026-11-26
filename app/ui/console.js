@@ -1,7 +1,11 @@
 "use strict";
 
+// Section: Console navigation state.
+
 let historyConsoleKey = "";
 let settingsCategory = "scope";
+
+// Section: Settings category navigation.
 
 function displaySettingsCategory(category = settingsCategory) {
   settingsCategory = category;
@@ -21,6 +25,8 @@ function displaySettingsCategory(category = settingsCategory) {
   show("prototype-rule-examples", settingsCategory === "naming");
   show("prototype-save-profile", settingsCategory !== "connector");
 }
+
+// Section: Scan progress and run history rendering.
 
 function renderConsole(state) {
   for (const radio of document.querySelectorAll('[name="prototype-scan-type"]')) {

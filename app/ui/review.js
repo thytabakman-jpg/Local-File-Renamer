@@ -19,6 +19,8 @@ let recommendationOutcome = "";
 let queuedNameJob = "";
 const queuedNames = new Map();
 
+// Section: View navigation and path utilities.
+
 function selectView(view) {
   currentView = view;
   if (view !== "review") {
@@ -41,6 +43,8 @@ function parentFolder(path) {
   const prefix = path.slice(0, path.length - leaf(path).length);
   return /^(?:[A-Za-z]:)?[\\/]$/.test(prefix) ? prefix : prefix.replace(/[\\/]+$/, "");
 }
+
+// Section: Review results and list rendering.
 
 function updateReview(state) {
   if (currentView !== "review" || !state.Phase) return;
@@ -196,6 +200,8 @@ function drawReview() {
   renderReviewControls(latest);
 }
 
+// Section: Selection eligibility and review controls.
+
 function rowSelectable(row, state) {
   return canReview(state) && !state.PreviewOnly && !row.Draft && Boolean(row.To || row.Metadata) &&
     reviewFilter !== "auto";
@@ -243,6 +249,8 @@ function renderReviewControls(state) {
   el("preview-summary").textContent = state.ApprovedWaiting ? state.ApprovedWaiting + " approved · waiting to apply" : state.Busy ? (state.Done || 0) + " of " + (state.Total || 0) + " items assessed" :
     reviewFilter === "proposed" ? (state.PreviewOnly ? "This run uses preview-only permissions." : (state.Proposed || 0) + " proposals awaiting review.") : reviewTotal + " files";
 }
+
+// Section: File details and location tree.
 
 function renderFileDetail(row) {
   const automatic = reviewFilter === "auto" && Boolean(row.AutomaticFrom);
@@ -333,6 +341,8 @@ function renderLocationTree(from, to, target = "location-tree") {
   tree.append(branches);
 }
 
+// Section: File preview loading and rendering.
+
 function clearFilePreview() {
   previewRequest?.abort();
   if (previewURL) URL.revokeObjectURL(previewURL);
@@ -410,6 +420,8 @@ for (const button of document.querySelectorAll("[data-review-filter]")) {
     updateReview(latest);
   };
 }
+// Section: Name recommendations and selection.
+
 const activeReviewRow = () => reviewRows.find(row => row.Index === reviewIndex);
 function resetRecommendations(key) {
   if (key === recommendationKey) return;
@@ -472,6 +484,8 @@ el("recommend-names").onclick = async () => {
     }
   }
 };
+
+// Section: Queued name approvals and recycling.
 
 function updateQueuedNames(state) {
   if (queuedNameJob !== state.Job) {
@@ -536,6 +550,8 @@ el("delete-flagged-file").onclick = async () => {
     notice(actionMessage);
   }
 };
+// Section: Review lifecycle and detail navigation.
+
 el("review-pause").onclick = () => action("pause");
 el("review-undo").onclick = () => el("undo").click();
 el("history-review").onclick = () => selectView("review");
@@ -543,6 +559,8 @@ el("file-details-tab").onclick = () => selectDetailTab(false);
 el("location-tab").onclick = () => selectDetailTab(true);
 el("file-prev").onclick = () => loadFilePreview(activeReviewRow(), Math.max(0,previewPage-1));
 el("file-next").onclick = () => loadFilePreview(activeReviewRow(), previewPage+1);
+// Section: Inline filename editing and application.
+
 function closeInlineName() {
   inlineEdit = undefined;
   show("prototype-inline-edit", false);
@@ -582,6 +600,8 @@ el("apply-current").onclick = async () => {
   }
   renderReviewControls(latest);
 };
+// Section: Location and individual review actions.
+
 el("prototype-view-location").onclick = () => selectDetailTab(true);
 el("keep-location").onclick = () => changeReviewLocation("");
 el("choose-location").onclick = async () => {
@@ -614,6 +634,8 @@ el("open-pdf").onclick = () => {
 };
 
 let bugContext;
+// Section: Diagnostic report generation and controls.
+
 function drawBugReport() {
   const {state, row, tab, recommendation, visibleApply, selectable, error} = bugContext;
   const paths = el("bug-paths").checked;

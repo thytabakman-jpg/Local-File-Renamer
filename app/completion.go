@@ -3,13 +3,18 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
+
+// Section: Completion receipt and outcome summaries.
 
 type completionCount struct {
 	Completed, Pending, Skipped, Failed int
@@ -70,6 +75,63 @@ func (s *session) receipt() completionReceipt {
 	return r
 }
 
+// Section: Receipt and run outcome helpers.
+
+func (s *session) metadataApproved(index int) bool {
+	for _, plan := range s.metadataPlans {
+		if plan.Index == index {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *session) availableTypes() []string {
+	if s.manifest.Inventory != nil {
+		return s.manifest.Inventory.FileTypes
+	}
+	return nil
+}
+
+func (s *session) zeroChangeReason(busy bool, pending int) string {
+	count := s.fileCount
+	if s.manifest.Inventory != nil {
+		count = s.manifest.Inventory.Included
+	}
+	switch {
+	case count == 0:
+		if s.manifest.Inventory != nil && s.manifest.Inventory.Found == 0 {
+			return "No files were found inside the selected scope"
+		}
+		return "No files matched the saved filter"
+	case s.renamed > 0 || len(s.repaired) > 0:
+		return ""
+	}
+	receipt := s.receipt()
+	switch {
+	case receipt.Renames.Failed > 0:
+		return "One or more file writes failed"
+	case len(s.plans) < s.fileCount && busy:
+		return "File assessment is in progress"
+	case len(s.plans) < s.fileCount:
+		return "Assessment paused or failed before all files were checked"
+	case s.manifest.Operation == scanDuplicates:
+		return "Duplicate Scanner leaves files unchanged"
+	case pending > 0 && s.manifest.Auto:
+		return "Pending proposals did not qualify for automatic apply"
+	case pending > 0:
+		return "Proposals await approval"
+	case receipt.Assessments.Failed > 0:
+		return "Assessment failed and produced no proposals"
+	case s.manifest.Operation == scanMove:
+		return "No eligible destination was found for the assessed files"
+	default:
+		return "Assessment produced no proposals"
+	}
+}
+
+// Section: Context-aware content hashing.
+
 type contextReader struct {
 	ctx context.Context
 	r   io.Reader
@@ -101,6 +163,8 @@ func comparisonHash(ctx context.Context, path string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// Section: Historical run comparison.
 
 type runDelta struct {
 	Path                                                                                                                       string
@@ -190,55 +254,133 @@ func (a *application) compareRuns(first, second string, offset int, showNames bo
 	return result, nil
 }
 
-func (s *session) metadataApproved(index int) bool {
-	for _, plan := range s.metadataPlans {
-		if plan.Index == index {
-			return true
-		}
+// Section: CSV report export.
+
+func csvCell(s string) string {
+	if len(s) > 0 && strings.ContainsRune("=+-@\t\r\n", rune(s[0])) {
+		return "'" + s
 	}
-	return false
+	return s
 }
 
-func (s *session) availableTypes() []string {
-	if s.manifest.Inventory != nil {
-		return s.manifest.Inventory.FileTypes
+func (a *application) exportInspections(w *csv.Writer, unknown bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.s == nil || a.v.Busy && !a.scanActive && a.v.Phase != "reassessing" {
+		return errors.New("The inspection report is unavailable during this operation")
 	}
-	return nil
+	if err := w.Write([]string{"Current path", "Proposed path", "Text or listing", "Metadata", "Image decoded", "Local AI", "Model", "Unknown publication fields", "Read ms", "OCR ms", "Model startup ms", "Local model ms", "Rename ms", "Outcome", "Notes", "Classification", "Naming decision", "Decision reason", "Cache", "AI contribution", "Total ms", "Publication date lookup", "Publication source", "Online lookup ms", "Classification checklist"}); err != nil {
+		return err
+	}
+	for _, r := range a.s.plans {
+		if a.s.manifest.Items[r.Index].Folder || unknown && !r.Unknown {
+			continue
+		}
+		var proposed string
+		if r.Move != nil {
+			proposed = r.Move.To
+		}
+		checked := r.Inspection
+		yesNo := func(b bool) string {
+			if b {
+				return "Yes"
+			}
+			return "No"
+		}
+		if checked.AI == "" {
+			checked.AI = "Not recorded"
+		}
+		outcome, note, renameMS := planOutcome(r), r.Note, int64(0)
+		if result, ok := a.s.outcomes[r.Index]; ok {
+			outcome, note, renameMS = result.Status, result.Note, result.RenameMS
+		}
+		if err := w.Write([]string{csvCell(a.s.currentPath(r.Path, r.Index)), csvCell(proposed),
+			yesNo(checked.Text), yesNo(checked.Metadata), yesNo(checked.Image), checked.AI, checked.Model, yesNo(r.Unknown),
+			strconv.FormatInt(checked.ReadMS, 10), strconv.FormatInt(checked.OCRMS, 10), strconv.FormatInt(checked.StartupMS, 10), strconv.FormatInt(checked.ModelMS, 10),
+			strconv.FormatInt(renameMS, 10), csvCell(outcome), csvCell(note), csvCell(r.Kind), csvCell(planOutcome(r)), csvCell(r.Reason), csvCell(checked.Cache), csvCell(checked.AIContribution), strconv.FormatInt(checked.TotalMS, 10), csvCell(checked.PublicationDate), csvCell(checked.PublicationSource), strconv.FormatInt(checked.OnlineMS, 10), csvCell(checklistText(checked.Checklist))}); err != nil {
+			return err
+		}
+	}
+	w.Flush()
+	return w.Error()
 }
 
-func (s *session) zeroChangeReason(busy bool, pending int) string {
-	count := s.fileCount
-	if s.manifest.Inventory != nil {
-		count = s.manifest.Inventory.Included
+func (a *application) export(w *csv.Writer) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.v.Busy {
+		return errors.New("Pause the run before exporting flags")
 	}
-	switch {
-	case count == 0:
-		if s.manifest.Inventory != nil && s.manifest.Inventory.Found == 0 {
-			return "No files were found inside the selected scope"
+	if a.s == nil {
+		return errors.New("There is no run to export")
+	}
+	if err := w.Write([]string{"Current path", "Action", "Reason"}); err != nil {
+		return err
+	}
+	for _, r := range a.s.flagRows() {
+		status := r.Status
+		if r.Type == "plan" {
+			status = "Review"
 		}
-		return "No files matched the saved filter"
-	case s.renamed > 0 || len(s.repaired) > 0:
-		return ""
+		if err := w.Write([]string{csvCell(a.s.currentPath(r.Path, r.Index)), status, csvCell(r.Note)}); err != nil {
+			return err
+		}
 	}
-	receipt := s.receipt()
-	switch {
-	case receipt.Renames.Failed > 0:
-		return "One or more file writes failed"
-	case len(s.plans) < s.fileCount && busy:
-		return "File assessment is in progress"
-	case len(s.plans) < s.fileCount:
-		return "Assessment paused or failed before all files were checked"
-	case s.manifest.Operation == scanDuplicates:
-		return "Duplicate Scanner leaves files unchanged"
-	case pending > 0 && s.manifest.Auto:
-		return "Pending proposals did not qualify for automatic apply"
-	case pending > 0:
-		return "Proposals await approval"
-	case receipt.Assessments.Failed > 0:
-		return "Assessment failed and produced no proposals"
-	case s.manifest.Operation == scanMove:
-		return "No eligible destination was found for the assessed files"
-	default:
-		return "Assessment produced no proposals"
+	w.Flush()
+	return w.Error()
+}
+
+// Section: Completion and review reporting.
+
+type batchReport struct {
+	Job                                         string
+	Phase                                       string
+	Revision                                    uint64
+	Total, Assessed, Drafts, Cached             int
+	Decisions, Classifications                  map[string]int
+	AI                                          map[string]int
+	ReadMS, OCRMS, StartupMS, ModelMS, RenameMS int64
+	PromptMS, GenerationMS                      int64
+	Clock                                       scanClock
+	AIContribution                              map[string]int
+	Receipt                                     completionReceipt
+}
+
+func (a *application) report(id string) (batchReport, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.s
+	if s == nil || id != "" && id != a.v.Job || a.v.Busy && !a.scanActive && a.v.Phase != "reassessing" {
+		return batchReport{}, errors.New("No matching live or saved batch report is available")
 	}
+	report := batchReport{
+		Job: a.v.Job, Phase: a.v.Phase, Revision: s.planRevision, Total: s.fileCount,
+		Drafts: len(a.cleanup) - a.cleanupThrough, Clock: a.v.Clock.at(time.Now()),
+		Decisions: make(map[string]int), Classifications: make(map[string]int), AI: make(map[string]int), AIContribution: make(map[string]int), Receipt: s.receipt(),
+	}
+	for _, plan := range s.plans[:min(s.fileCount, len(s.plans))] {
+		report.Assessed++
+		report.Decisions[planOutcome(plan)]++
+		if plan.Kind != "" {
+			report.Classifications[plan.Kind]++
+		}
+		check := plan.Inspection
+		if check.AI != "" {
+			report.AI[check.AI]++
+		}
+		if check.AIContribution != "" {
+			report.AIContribution[check.AIContribution]++
+		}
+		if check.Cache != "" {
+			report.Cached++
+		}
+		report.ReadMS += check.ReadMS
+		report.OCRMS += check.OCRMS
+		report.StartupMS += check.StartupMS
+		report.ModelMS += check.ModelMS
+		report.PromptMS += check.PromptMS
+		report.GenerationMS += check.GenerationMS
+		report.RenameMS += s.outcomes[plan.Index].RenameMS
+	}
+	return report, nil
 }

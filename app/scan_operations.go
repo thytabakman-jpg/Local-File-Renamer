@@ -13,6 +13,8 @@ import (
 	"strings"
 )
 
+// Section: Supported scan operations and result contracts.
+
 type scanOperation string
 
 const (
@@ -53,6 +55,8 @@ type operationResults struct {
 	possible          []duplicateGroup
 }
 
+// Section: Operation result retrieval.
+
 func (a *application) scanResults(id string) (operationResults, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -69,6 +73,8 @@ func (a *application) scanResults(id string) (operationResults, error) {
 		return operationResults{}, errors.New("This run uses the filename review")
 	}
 }
+
+// Section: Move result grouping and proposal construction.
 
 func (s *session) moveFolders() []moveFolder {
 	root := s.manifest.Root
@@ -179,6 +185,8 @@ func (s *session) buildMoveSuggestion(index int, d decision, st stamp, revision 
 	return r
 }
 
+// Section: Destination validation and preparation.
+
 func (s *session) validateProposedFolder(m move) error {
 	root, folder := s.manifest.Root, filepath.Dir(m.To)
 	if err := safeParent(root, m.From); err != nil {
@@ -216,6 +224,8 @@ func (s *session) prepareMoveFolder(m *move) error {
 	m.TargetParent = target.ID
 	return s.validateMoveParents(*m)
 }
+
+// Section: Duplicate scan and scoped hashing.
 
 func (a *application) runDuplicates(ctx context.Context, s *session) {
 	if err := validateRoot(s.manifest.Root); err != nil {
@@ -313,6 +323,8 @@ func scopedDuplicateHash(ctx context.Context, root *os.Root, path string) (strin
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
+
+// Section: Duplicate result grouping and candidate classification.
 
 func similarFilename(path string) string {
 	stem, _, _ := duplicateFilenameParts(baseName(filepath.Base(path)))

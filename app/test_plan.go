@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"time"
 )
+
+// Section: Experiment plan, variant and result contracts.
 
 type testPlan struct {
 	Success    string            `json:"success,omitempty"`
@@ -76,6 +77,8 @@ type savedTest struct {
 	InputHash  string         `json:"input_sha256,omitempty"`
 }
 
+// Section: Plan identity and path validation.
+
 var testIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,100}$`)
 
 func cleanTestPath(value string, folder bool) (string, error) {
@@ -89,6 +92,8 @@ func cleanTestPath(value string, folder bool) (string, error) {
 	}
 	return filepath.ToSlash(path), nil
 }
+
+// Section: Experiment admission and settings validation.
 
 func (a *application) validateTestPlan(plan testPlan, baseline scanSettings) (testPlan, []scanSettings, error) {
 	plan.Name = strings.TrimSpace(plan.Name)
@@ -239,6 +244,8 @@ func (a *application) validateTestPlan(plan testPlan, baseline scanSettings) (te
 	return plan, settings, nil
 }
 
+// Section: Experiment persistence.
+
 func (a *application) saveTestPlan(plan testPlan) (savedTest, error) {
 	a.mu.Lock()
 	baseline, closing := a.activeSettings(), a.v.Closing
@@ -293,54 +300,3 @@ func (a *application) readTest(id string) (savedTest, error) {
 	return job, nil
 }
 
-func (a *application) testStatus(id string) (testReceipt, error) {
-	a.testMu.Lock()
-	defer a.testMu.Unlock()
-	if a.testActive.Job != "" && a.testActive.Job == id {
-		return a.testActive, nil
-	}
-	job, err := a.readTest(id)
-	if job.Status == "running" {
-		job.Status, job.Headline = "interrupted", "The app closed before the test finished."
-		if len(job.Findings) > 0 {
-			job.Report = "/api/test-report?job=" + job.Job
-		}
-	}
-	return job.testReceipt, err
-}
-
-func (a *application) startTest(id string) (testReceipt, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.testMu.Lock()
-	defer a.testMu.Unlock()
-	if a.v.Closing || a.testActive.Job != "" {
-		return testReceipt{}, errors.New("The app is closing or a test is already running")
-	}
-	job, err := a.readTest(id)
-	if err != nil {
-		return testReceipt{}, err
-	}
-	if job.Status != "draft" {
-		job, err = a.saveNewTest(job.Plan, job.Settings)
-		if err != nil {
-			return testReceipt{}, err
-		}
-	}
-	job.Status, job.Headline = "running", "Preparing identical test inputs"
-	if err := a.writeTest(job); err != nil {
-		return testReceipt{}, err
-	}
-	a.testActive = job.testReceipt
-	a.testDone = make(chan struct{})
-	ctx, cancel := context.WithCancel(a.chat.lifetime)
-	a.testCancel = cancel
-	go a.runTest(ctx, job)
-	return job.testReceipt, nil
-}
-
-func (a *application) sendTestProgress(job savedTest) {
-	a.testMu.Lock()
-	defer a.testMu.Unlock()
-	a.testActive = job.testReceipt
-}

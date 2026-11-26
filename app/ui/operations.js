@@ -1,5 +1,7 @@
 "use strict";
 
+// Section: Operation-specific view state.
+
 let operationKey = "";
 let operationJob = "";
 let moveFolders = [];
@@ -17,6 +19,8 @@ el("retry-operation-results").onclick = () => {
   operationKey = "";
   updateOperationReview(latest);
 };
+
+// Section: Operation result loading.
 
 async function updateOperationReview(state) {
   const moving = state.Operation === "move";
@@ -89,6 +93,8 @@ async function updateOperationReview(state) {
     show("retry-operation-results", true);
   }
 }
+
+// Section: Move review and retained locations.
 
 el("kept-locations").ontoggle = () => {
   if (el("kept-locations").open && latest.Operation === "move" && !latest.Busy) loadKeptLocations(latest, 0);
@@ -202,6 +208,8 @@ function drawMoveReview() {
   show("apply-all-moves", canApply && moveFolders.some(item => item.Proposals?.length));
 }
 
+// Section: Duplicate review selection and approval state.
+
 function selectDuplicateView(view) {
   duplicateView = view;
   for (const button of document.querySelectorAll("[data-duplicate-view]")) {
@@ -247,6 +255,8 @@ function updateVerifiedApproval() {
     approve.disabled = recycleBatchRunning;
   }
 }
+
+// Section: Verified duplicate recommendations.
 
 function drawVerifiedDuplicates(state) {
   const target = el("verified-duplicates");
@@ -325,6 +335,8 @@ el("approve-all-verified").onclick = () => confirmVerifiedDuplicates(latest, app
 
 el("apply-all-duplicates").onclick = () => confirmVerifiedDuplicates(latest, approvalGroups(), exactRecommendations);
 
+// Section: Duplicate confirmation and application.
+
 function confirmVerifiedDuplicates(state, groups, exact = []) {
   if (recycleBatchRunning || !verifiedCanRecycle || !groups.length && !exact.length) return;
   const dialog = el("duplicate-approval-dialog");
@@ -387,6 +399,8 @@ async function submitDuplicateApproval(state, groups, actionName, verifiedGroups
     updateVerifiedApproval();
   }
 }
+
+// Section: Exact duplicate groups and pair comparisons.
 
 function drawExactDuplicates(groups, canRecycle, state) {
   const id = "exact-duplicates";
@@ -539,6 +553,8 @@ function drawExactDuplicates(groups, canRecycle, state) {
   }));
 }
 
+// Section: Duplicate file preview rendering.
+
 function renderComparisonPreview(previews, job, file) {
   const panel = document.createElement("section");
   const title = document.createElement("h3");
@@ -596,6 +612,8 @@ function renderComparisonPreview(previews, job, file) {
   }
   load(0);
 }
+
+// Section: Move application and destination controls.
 
 el("apply-all-moves").onclick = () => applyAllProposals("all", "", "pending moves across all destinations");
 el("apply-folder-moves").onclick = () => applyAllProposals("folder", selectedFolder, "pending moves to " + selectedFolder);

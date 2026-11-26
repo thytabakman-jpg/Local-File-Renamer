@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+// Section: Saved experiment history.
+
 type testHistoryRow struct {
 	testReceipt
 	Name string `json:"name"`
@@ -34,6 +36,8 @@ func (a *application) listTests() []testHistoryRow {
 	}
 	return rows
 }
+
+// Section: Experiment HTTP endpoints.
 
 func (a *application) registerTestRoutes(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/tests", func(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +129,8 @@ func (a *application) registerTestRoutes(mux *http.ServeMux, auth func(http.Resp
 	})
 }
 
+// Section: Markdown report formatting and rendering.
+
 var testMarkdown = strings.NewReplacer("\\", "\\\\", "\n", " ", "\r", " ", "|", "\\|", "<", "&lt;", ">", "&gt;",
 	"`", "\\`", "[", "\\[", "]", "\\]", "*", "\\*", "_", "\\_")
 
@@ -174,6 +180,8 @@ func testMemoryDisplay(bytes uint64) string {
 	}
 	return fmt.Sprintf("%.1f", float64(bytes)/(1<<20))
 }
+
+// Section: Variant evidence and acceptance criteria.
 
 func writeTestVariant(out *strings.Builder, job savedTest, index int, finding testFinding, full bool) {
 	md := testMarkdown.Replace

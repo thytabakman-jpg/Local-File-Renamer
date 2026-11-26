@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+// Section: Inspection result and model error contracts.
+
 type inspection struct {
 	Text, Metadata, Image                      bool
 	AI, Detail, Model                          string
@@ -42,6 +44,8 @@ func localAIIssue(err error) (status, note string) {
 	}
 	return modelUnavailable, "Local model could not assess this file: " + err.Error()
 }
+
+// Section: Proposal construction and journal admission.
 
 func recordSuggestion(s *session, i int, d decision, st stamp) error {
 	if st.ID != "" && photoExtension(s.manifest.Items[i].Path) {
@@ -123,6 +127,8 @@ func buildSuggestion(s *session, i int, d decision, st stamp, revision bool) rec
 		Rough: auto && photoExtension(item.Path) && imageSubject(baseName(filepath.Base(item.Path))) == ""}
 }
 
+// Section: Assessment interface and inspection dispatch.
+
 type assessFile func(context.Context, string, evidence) (assessment, error)
 
 func suggest(ctx context.Context, s *session, m *localModel, i int) (decision, stamp, error) {
@@ -143,6 +149,8 @@ func inspect(ctx context.Context, s *session, assess assessFile, transcribe tran
 func inspectFile(ctx context.Context, s *session, assess assessFile, transcribe transcribePage, i int, override string, refresh bool, opts scanSettings) (result decision, original stamp, failure error) {
 	return inspectPrepared(ctx, s, assess, transcribe, i, override, refresh, opts, nil)
 }
+
+// Section: Evidence preparation and PDF enrichment.
 
 type preparedEvidence struct {
 	Evidence evidence
@@ -195,6 +203,8 @@ func addPDFEvidence(ctx context.Context, path string, opts scanSettings, pre *pr
 	return true
 }
 
+// Section: File inspection and decision pipeline.
+
 func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcribe transcribePage, i int, override string, refresh bool, opts scanSettings, pre *preparedEvidence) (result decision, original stamp, failure error) {
 	started := time.Now()
 	rules := opts.Naming
@@ -238,26 +248,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		pre = &p
 	}
 	cached, reused, e, readMS := pre.Cached, pre.Reused, pre.Evidence, pre.ReadMS
-	ocrStatus := cached.OCR
-	var ocrMS int64
-	var ocrErr error
-	if !reused && opts.Evidence.UseOCR && strings.EqualFold(extension(item.Path), ".pdf") && transcribe != nil && ctx.Err() == nil &&
-		(len(e.Text) < 35 || opts.Evidence.OCRUnresolved && unresolvedPDF(s, opts, item.Path, name, override, e)) {
-		ocrStart := time.Now()
-		extracted, note, err := scanOCRWithError(ctx, item.Path, transcribe, opts.Evidence.OCRPages)
-		ocrMS, ocrStatus, ocrErr = elapsedMS(ocrStart), note, err
-		if extracted != "" {
-			if len(e.Text) < 35 {
-				e.Text = chars(extracted, opts.Evidence.TextBytes)
-			} else if !strings.Contains(norm(e.Text), norm(extracted)) {
-				e.Text = chars(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+extracted, opts.Evidence.TextBytes)
-			}
-			e.Note, ocrStatus = "", "Read sampled pages"
-		} else {
-			e.Note = joinNote(e.Note, note)
-		}
-	}
-
+	e, ocrStatus, ocrMS, ocrErr := enrichOCREvidence(ctx, s, opts, item, name, override, cached, reused, e, transcribe)
 	if s.manifest.Operation == scanMove {
 		return inspectLocation(ctx, s, assess, opts, item.Path, name, cacheName, *pre, e, ocrStatus, ocrMS, ocrErr, refresh), st, ctx.Err()
 	}
@@ -338,23 +329,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		}
 		check.AIContribution = evidenceBenefit(known, d)
 	}
-	if s.online != nil && opts.Evidence.OnlineDates != "off" && localPublicationYear(e) == "" &&
-		(d.Kind == "article" || d.Kind == "book" || d.Kind == "academic_book" || extractDOI(chars(e.Text, 2200)) != "") {
-		started := time.Now()
-		confirmed, err := s.online.publicationDate(ctx, name, e)
-		check.OnlineMS = elapsedMS(started)
-		if err != nil {
-			check.PublicationDate = err.Error()
-		} else {
-			check.PublicationDate, check.PublicationSource = confirmed.Reason, confirmed.Source.URL
-			if confirmed.Year != "" {
-				e.Year = confirmed.Year
-				d = decideWithRules(name, e, a, used, rules, override)
-				d.AutoEvidence = false
-				check.PublicationDate = confirmed.Year + " confirmed by " + confirmed.Provider
-			}
-		}
-	}
+	d, e, check = verifyScanPublicationDate(ctx, s, opts, name, e, a, used, rules, override, d, check)
 	cleaned := rules.cleanName(d.Name, false)
 	formattingOnlyPDF := s.manifest.Auto && d.Name == name && strings.EqualFold(extension(name), ".pdf")
 	if !formattingOnlyPDF && cleaned != d.Name && (cleaned == name || windowsNameLength(cleaned) <= rules.MaxLength) {
@@ -413,18 +388,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 	d.Inspection = check
 	destination, sortNote := s.sortIndex.suggest(item.Path, e, a, used)
 	d.Folder, d.Note = destination, joinNote(d.Note, sortNote)
-	if s.manifest.RepairMetadata {
-		d.Metadata = suggestMetadata(name, e, a)
-		if d.Metadata != nil && d.Metadata.Title != "" {
-			d.Metadata.Title = readableTitle(d.Metadata.Title)
-			if d.Metadata.Title == d.Metadata.OldTitle {
-				d.Metadata.Title = ""
-			}
-			if d.Metadata.Title == "" && d.Metadata.Author == "" {
-				d.Metadata = nil
-			}
-		}
-	}
+	d = finalizeScanMetadata(s, name, e, a, d)
 	if modelErr != nil && check.AI == modelTimeout && opts.AI.TimeoutSeconds != 180 && hasModelFailure(modelErr, modelTimeout) {
 		d.Note = strings.ReplaceAll(d.Note, "timed out after 3 minutes", fmt.Sprintf("timed out after %d seconds", opts.AI.TimeoutSeconds))
 	}
@@ -441,6 +405,8 @@ func unresolvedPDF(s *session, opts scanSettings, path, name, override string, e
 	d := decideWithRules(name, e, assessment{}, false, opts.Naming, override)
 	return d.Unknown || d.Note != "" || d.Name == name && d.Outcome != "Name verified"
 }
+
+// Section: Folder assessment.
 
 func folderDecision(ctx context.Context, path string, assess assessFile, s *session) decision {
 	name := filepath.Base(path)
@@ -491,6 +457,8 @@ func folderDecision(ctx context.Context, path string, assess assessFile, s *sess
 	}
 	return decision{Name: makeName([]string{a.Label}, ""), Inspection: inspection{AI: "Used", ModelMS: elapsedMS(start)}}
 }
+
+// Section: Current-path resolution and evidence prefetch.
 
 func (s *session) currentPath(path string, index int) string {
 	active := len(s.moves) - s.undoCount

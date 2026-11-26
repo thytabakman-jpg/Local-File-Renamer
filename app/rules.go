@@ -1,14 +1,14 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf16"
 )
+
+// Section: Naming configuration and defaults.
 
 type namingRules struct {
 	NormalizeSpacing    bool              `json:"normalize_spacing"`
@@ -41,6 +41,8 @@ var namingFormats = map[string]string{
 var spacedDash = regexp.MustCompile(`(?:\s+-\s*|\s*-\s+)`)
 var spellingWord = regexp.MustCompile(`^[\pL\pM]+$`)
 
+// Section: Rule validation.
+
 func validateRules(r namingRules) error {
 	if len(r.Protected) > 100 {
 		return errors.New("Use at most 100 protected terms")
@@ -60,6 +62,8 @@ func validateRules(r namingRules) error {
 	}
 	return nil
 }
+
+// Section: Name normalization and protection.
 
 var codeWithUnderscore = regexp.MustCompile(`\b[A-Z]{2,12}_\d{2,}[A-Z]?\b`)
 var alternateSeparator = strings.NewReplacer(" – ", " - ", " _ ", " - ")
@@ -171,6 +175,8 @@ func (r namingRules) cleanName(name string, folder bool) string {
 	return stem + ext
 }
 
+// Section: Windows name validation.
+
 func windowsNameLength(name string) int { return len(utf16.Encode([]rune(name))) }
 
 func validProposedName(name, original string, folder bool) bool {
@@ -180,51 +186,38 @@ func validProposedName(name, original string, folder bool) bool {
 		(folder || extension(name) == extension(original))
 }
 
-func atomicJSON(path string, value any) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".renamer-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(data)
-	if err = errors.Join(err, f.Close()); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
-}
+// Section: Filename construction.
 
-func (a *application) getRules() ruleSet {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return ruleSet{Revision: a.profiles.Revision, Rules: a.activeSettings().Naming, Formats: namingFormats}
-}
+func makeName(parts []string, ext string) string { return defaultRules.makeName(parts, ext) }
 
-func (a *application) updateRules(revision uint64, r namingRules) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	settings := a.activeSettings()
-	if r.Capitalization == "" {
-		r.Capitalization = settings.Naming.Capitalization
+func (r namingRules) makeName(parts []string, ext string) string {
+	var safe []string
+	for _, part := range parts {
+		part = r.renderPart(strings.Trim(clean(forbidden.ReplaceAllString(part, " ")), " ."))
+		if part != "" {
+			safe = append(safe, part)
+		}
 	}
-	if r.Separator == "" {
-		r.Separator = settings.Naming.Separator
+	if len(safe) == 0 {
+		return ""
 	}
-	if r.MaxLength == 0 {
-		r.MaxLength = settings.Naming.MaxLength
+	// Keep the leading citation fields and journal/publisher even when the title is long.
+	for windowsNameLength(strings.Join(safe, r.Separator)+ext) > r.MaxLength {
+		longest := 0
+		for i, part := range safe {
+			if len([]rune(part)) > len([]rune(safe[longest])) {
+				longest = i
+			}
+		}
+		runes := []rune(safe[longest])
+		if len(runes) < 8 {
+			break
+		}
+		safe[longest] = strings.TrimRight(string(runes[:len(runes)-1]), " .")
 	}
-	if r.AuthorFormat == "" {
-		r.AuthorFormat = settings.Naming.AuthorFormat
+	title := strings.Join(safe, r.Separator)
+	if reserved.MatchString(title) {
+		title = "File - " + title
 	}
-	if r.VersionFormat == "" {
-		r.VersionFormat = settings.Naming.VersionFormat
-	}
-	settings.Naming = r
-	if err := validateSettings(settings); err != nil {
-		return err
-	}
-	return a.saveProfileLocked(revision, a.profiles.Active, &settings, true)
+	return title + ext
 }

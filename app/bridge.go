@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+// Section: Bridge protocol configuration and command contract.
+
 const bridgeURL = "http://127.0.0.1:39173/api/bridge"
 
 type bridgeCommand struct {
@@ -65,6 +67,8 @@ const appVersion = "3.6"
 const bridgeVersion = 4
 const bridgeResponseLimit = 512 << 10
 
+// Section: Connector credentials and activation.
+
 func bridgeKeyPath(home string) string { return filepath.Join(home, "desktop-connection.key") }
 
 func (a *application) setBridge(enabled bool) error {
@@ -100,6 +104,8 @@ func (a *application) setBridge(enabled bool) error {
 	a.bridgeKey, a.v.BridgeEnabled = key, true
 	return nil
 }
+
+// Section: HTTP bridge authorization and action dispatch.
 
 func (a *application) bridge(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
@@ -320,6 +326,8 @@ func (a *application) bridgeAction(cmd bridgeCommand) (any, error) {
 	return response, err
 }
 
+// Section: MCP tool schemas and registry.
+
 func toolSchema(properties map[string]any, required ...string) map[string]any {
 	schema := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
 	if len(required) > 0 {
@@ -378,6 +386,8 @@ func bridgeToolList() []map[string]any {
 }
 
 var bridgeTools = bridgeToolList()
+
+// Section: STDIO MCP protocol loop.
 
 func runMCP(home string, input io.Reader, output io.Writer) {
 	in := bufio.NewScanner(input)
@@ -446,6 +456,8 @@ func runMCP(home string, input io.Reader, output io.Writer) {
 		}
 	}
 }
+
+// Section: Bridge client response and transport.
 
 func bridgeVersionDetails(data string) (string, error) {
 	var versions map[string]any

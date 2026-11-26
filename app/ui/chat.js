@@ -1,8 +1,12 @@
 "use strict";
 
+// Section: Chat state.
+
 const chatEl = id => document.getElementById(id);
 let localChatBusy = false;
 let chatScanVersion = 0;
+
+// Section: Chat message rendering.
 
 function addChatMessage(role, text) {
   const article = document.createElement("article");
@@ -73,6 +77,8 @@ function showChatReply(reply) {
   return message;
 }
 
+// Section: Scan monitoring and chat requests.
+
 async function watchChatScan(reply) {
   const version = ++chatScanVersion;
   const query = new URLSearchParams({ id:reply.ScanID, exact:reply.ExactOnly ? "1" : "0", results:reply.ShowResults ? "1" : "0" });
@@ -138,6 +144,8 @@ async function sendChat(request) {
   }
 }
 
+// Section: Chat interaction bindings.
+
 chatEl("reset-chat").addEventListener("click", () => sendChat({Reset:true}));
 chatEl("chat-form").addEventListener("submit", event => {
   event.preventDefault();
@@ -150,6 +158,8 @@ chatEl("chat-form").addEventListener("submit", event => {
   sendChat({Message:message, Folder:chatEl("folder").value.trim(), Model:chatEl("chat-model").value, Operation:chatEl("scan-operation").value});
 });
 
+// Section: Experiment entry point.
+
 chatEl("chat-test-prompt").onclick = () => {
   const input = chatEl("chat-input");
   const prefix = "Plan a test: ";
@@ -157,6 +167,8 @@ chatEl("chat-test-prompt").onclick = () => {
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
 };
+
+// Section: Experiment request, editing and execution.
 
 async function testRequest(path, body) {
   const options = {cache:"no-store"};
@@ -231,6 +243,8 @@ function testPlanEditor(plan, savedJob = "") {
 }
 
 let testHistoryTimer, testHistoryKey = "";
+// Section: Saved experiment history.
+
 async function refreshTestHistory() {
   clearTimeout(testHistoryTimer);
   if (currentView !== "history" || closed || closing) return;

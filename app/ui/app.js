@@ -1,5 +1,7 @@
 "use strict";
 
+// Section: Shared application state and configuration.
+
 const el = (id) => document.getElementById(id);
 const operationNames = {rename: "File Renamer", move: "Sorter", duplicates: "Duplicate Scanner"};
 const phases = {
@@ -38,6 +40,8 @@ const profileSections = {
   cache:"Cache and reassessment", execution:"Execution permissions"
 };
 const settingsLists = new Set(["include_extensions","exclude_extensions","include_paths","exclude_paths","selected_paths","protected","auto_kinds"]);
+
+// Section: Notifications and inspection rendering.
 
 function notice(message) {
   el("message").textContent = message || "";
@@ -133,6 +137,8 @@ async function loadInspection(key, offset, unknown) {
   }
 }
 
+// Section: Completion reporting and history comparison.
+
 async function loadReceipt(key) {
   try {
     const response = await fetch("/api/report?" + new URLSearchParams({job:latest.Job}), {cache:"no-store",signal:AbortSignal.timeout(5000)});
@@ -185,6 +191,8 @@ async function compareScans(offset) {
 el("compare").onclick=()=>compareScans(0);
 el("compare-more").onclick=()=>compareScans(compareOffset);
 
+// Section: Correction and reassessment controls.
+
 function openCorrection(row, id, revision, applyName = false) {
   correction = {id, revision, index:row.Index, applyName};
   show("correct-kind-label", !applyName);
@@ -211,6 +219,8 @@ el("reassess-group").onclick = () => {
   const value = window.prompt("Value to match, such as .pdf, article, or Insufficient evidence");
   if (value?.trim()) action("reassess", {id:latest.Job, revision:latest.Revision, group, value:value.trim(), refresh:el("fresh-assessment").checked});
 };
+
+// Section: Profile settings rendering and persistence.
 
 function populateSettings(data, profile) {
   const nodes = [];
@@ -299,6 +309,8 @@ el("save-profile").onclick = async () => {
 };
 
 
+// Section: Timing and diagnostics.
+
 function duration(ms) {
   if (ms < 1000) return ms + " ms";
   if (ms < 60000) return (ms / 1000).toFixed(1) + " s";
@@ -332,6 +344,8 @@ async function loadDiagnostics(key, job) {
     if (inspectionKey === key && !closed) el("diagnostic-summary").textContent = err.message;
   }
 }
+
+// Section: Shared review and action utilities.
 
 function canReview(state) {
   return !state.Pending && ["preview", "paused", "files", "folders"].includes(state.Phase);
@@ -367,6 +381,8 @@ async function action(name, fields = {}) {
     await refresh();
   }
 }
+
+// Section: Scan state and inventory rendering.
 
 function folderKey(path) {
   path = path.trim();
@@ -425,6 +441,18 @@ function render(s) {
   const differentFolder = hadWork && folderKey(el("folder").value) !== folderKey(s.Root);
   const scanning = ["indexing", "starting", "files", "folders", "reassessing", "undo", "applying", "metadata"].includes(s.Phase);
 
+  renderScanSetupControls(s, startFailed, chosenOperation);
+  renderScanLifecycleControls(s, hadWork, differentFolder, chosenOperation, partial, scanning);
+  const live = s.Busy && ["files","folders","starting"].includes(s.Phase);
+  if (typeof updateReview === "function") updateReview(s);
+  renderScanProgress(s, partial, hadWork, startFailed, differentFolder, chosenOperation);
+  renderFlaggedItems(s, hadWork);
+  renderInspectionReports(s, hadWork, live);
+  renderRunHistory(s);
+  if (typeof renderConsole === "function") renderConsole(s);
+}
+
+function renderScanSetupControls(s, startFailed, chosenOperation) {
   el("phase").textContent = startFailed ? "Scan failed" : s.Pausing ? "Pausing…" : (phases[s.Phase] || s.Phase);
   notice(actionMessage || (startFailed && s.StartError) || s.Message || (s.Phase === "legacy-paused" ? "Start a new scan to review changes from this folder." : ""));
   show("model-panel", chosenOperation !== "duplicates" && !s.ModelReady);
@@ -454,6 +482,9 @@ function render(s) {
   el("auto").disabled = s.Busy || scanProfile?.effective.execution.mode === "preview_only";
   el("repair").disabled = s.Busy;
 
+}
+
+function renderScanLifecycleControls(s, hadWork, differentFolder, chosenOperation, partial, scanning) {
   const canResume = hadWork && s.Phase === "paused" && !s.Busy;
   show("start", !s.Busy);
   show("start-fresh", !s.Busy);
@@ -479,8 +510,9 @@ function render(s) {
   el("bridge").checked = s.BridgeEnabled;
   el("history").disabled = s.Busy || !(s.Jobs || []).length;
 
-  const live = s.Busy && ["files","folders","starting"].includes(s.Phase);
-  if (typeof updateReview === "function") updateReview(s);
+}
+
+function renderScanProgress(s, partial, hadWork, startFailed, differentFolder, chosenOperation) {
   el("active-profile").textContent = scanProfile?.active ? "Profile: " + scanProfile.active : "";
   el("media-samples").disabled = s.Busy || partial;
   el("preview-only").disabled = s.Busy || scanProfile?.effective.execution.mode === "preview_only";
@@ -510,6 +542,9 @@ function render(s) {
   for (const [id, key] of [["renamed","Renamed"],["moved","Moved"],["kept","Kept"],["flagged","Flagged"],["skipped","Skipped"],["metadata-done","MetadataDone"]]) {
     el(id).textContent = (s[key] || 0).toLocaleString();
   }
+}
+
+function renderFlaggedItems(s, hadWork) {
   show("export", hadWork && !s.Busy && s.Flagged > 0);
   show("flag-scroll", s.Flagged > 0);
   el("flag-description").textContent = s.Flagged > 0 ?
@@ -530,6 +565,9 @@ function render(s) {
     });
     el("rows").replaceChildren(...rows);
   }
+}
+
+function renderInspectionReports(s, hadWork, live) {
   const reports = hadWork && (!s.Busy || live || s.Phase === "reassessing");
   show("inspection-panel", reports);
   show("reassess-group", reports && !s.Busy && s.Done > 0);
@@ -547,6 +585,9 @@ function render(s) {
       loadDiagnostics(inspectionKey, s.Job);
     }
   }
+}
+
+function renderRunHistory(s) {
   const newHistoryKey = JSON.stringify(s.Jobs);
   if (newHistoryKey !== historyKey) {
     historyKey = newHistoryKey;
@@ -563,8 +604,9 @@ function render(s) {
   }
   if (s.Job) el("history").value = s.Job;
   show("comparison-panel", !s.Busy && (s.Jobs || []).length > 1);
-  if (typeof renderConsole === "function") renderConsole(s);
 }
+
+// Section: State polling.
 
 async function refresh() {
   if (closed) return;
@@ -588,6 +630,8 @@ async function refresh() {
     }
   }
 }
+
+// Section: Folder selection and scan configuration.
 
 el("pick").onclick = async () => {
   el("pick").disabled = true;
@@ -647,6 +691,8 @@ el("scope-mode").onchange = refreshFileTypeSelection;
 el("file-type-options").addEventListener("change",refreshFileTypeSelection);
 el("custom-extensions").addEventListener("input",refreshFileTypeSelection);
 
+// Section: Scan launch and lifecycle controls.
+
 async function submitScan(fresh) {
   if (pendingAction || pendingScan) return;
   const requestID = crypto.randomUUID();
@@ -684,6 +730,8 @@ el("model").onclick = () => action(latest.Phase === "download" ? "pause" : "mode
 el("undo").onclick = () => {
   if (latest.Phase === "undo-paused" || window.confirm("Undo applied file moves, renames, and metadata repairs for this run?")) action("undo");
 };
+// Section: Batch approval and application.
+
 async function applyAllProposals(filter, folder, description) {
   const {Job, Revision} = latest;
   if (!Job || latest.PreviewOnly) return;
@@ -713,6 +761,8 @@ el("apply").onclick = async () => {
     }
   }
 };
+// Section: Pagination, history and application controls.
+
 el("previous-page").onclick = () => {pageOffset=Math.max(0,pageOffset-100);updateReview(latest);};
 el("next-page").onclick = () => {if (pageOffset+100<reviewTotal) {pageOffset+=100;updateReview(latest);}};
 el("inspection-panel").ontoggle = () => render(latest);

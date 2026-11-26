@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+// Section: Experiment evidence and result contracts.
+
 type testFileResult struct {
 	File, Result, Expected, Verdict string
 	Status, Reason, Note, Applied   string
@@ -38,6 +40,8 @@ type testFinding struct {
 	Rows                               []testFileResult
 	Groups                             []testDuplicateResult
 }
+
+// Section: Frozen input identity and copying.
 
 func testPathKey(path string) string {
 	if runtime.GOOS == "windows" {
@@ -135,6 +139,8 @@ func copyTestFile(ctx context.Context, root *os.Root, rel, dst string, original 
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
+
+// Section: Experiment orchestration and variant execution.
 
 func (a *application) runTest(ctx context.Context, job savedTest) {
 	dir := filepath.Join(a.home, "tests", job.Job)
@@ -348,6 +354,8 @@ func (a *application) runTestVariant(ctx context.Context, variant testVariant, o
 	return
 }
 
+// Section: Finding aggregation.
+
 func (f *testFinding) countVerdicts() {
 	f.Selected = len(f.Rows)
 	for _, row := range f.Rows {
@@ -361,6 +369,8 @@ func (f *testFinding) countVerdicts() {
 		}
 	}
 }
+
+// Section: Baseline reconstruction.
 
 func (a *application) readBaselineVariant(ctx context.Context, v testVariant, frozen string, items []entry, refs map[string]testExpectation) testFinding {
 	f := testFinding{Name: v.Name, Operation: v.Operation, Status: "failed"}
@@ -407,6 +417,8 @@ func (a *application) readBaselineVariant(ctx context.Context, v testVariant, fr
 	f.countVerdicts()
 	return f
 }
+
+// Section: Disposable-copy mutation testing.
 
 func applyTestVariant(ctx context.Context, runner *application, groups operationResults) error {
 	s := runner.s
@@ -456,6 +468,8 @@ func applyTestVariant(ctx context.Context, runner *application, groups operation
 	return nil
 }
 
+// Section: Resource measurement.
+
 func sampleTestMemory() func() uint64 {
 	stop := make(chan struct{})
 	result := make(chan uint64, 1)
@@ -480,6 +494,8 @@ func sampleTestMemory() func() uint64 {
 		return <-result
 	}
 }
+
+// Section: Outcome summary and criterion evaluation.
 
 func testHeadline(job savedTest) string {
 	if job.InputError != "" {
@@ -626,4 +642,58 @@ func testRuleKeeper(s *session, members []duplicateMember, rule testKeeperRule) 
 		return name
 	}
 	return ""
+}
+
+// Section: Experiment status and execution initiation.
+
+func (a *application) testStatus(id string) (testReceipt, error) {
+	a.testMu.Lock()
+	defer a.testMu.Unlock()
+	if a.testActive.Job != "" && a.testActive.Job == id {
+		return a.testActive, nil
+	}
+	job, err := a.readTest(id)
+	if job.Status == "running" {
+		job.Status, job.Headline = "interrupted", "The app closed before the test finished."
+		if len(job.Findings) > 0 {
+			job.Report = "/api/test-report?job=" + job.Job
+		}
+	}
+	return job.testReceipt, err
+}
+
+func (a *application) startTest(id string) (testReceipt, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.testMu.Lock()
+	defer a.testMu.Unlock()
+	if a.v.Closing || a.testActive.Job != "" {
+		return testReceipt{}, errors.New("The app is closing or a test is already running")
+	}
+	job, err := a.readTest(id)
+	if err != nil {
+		return testReceipt{}, err
+	}
+	if job.Status != "draft" {
+		job, err = a.saveNewTest(job.Plan, job.Settings)
+		if err != nil {
+			return testReceipt{}, err
+		}
+	}
+	job.Status, job.Headline = "running", "Preparing identical test inputs"
+	if err := a.writeTest(job); err != nil {
+		return testReceipt{}, err
+	}
+	a.testActive = job.testReceipt
+	a.testDone = make(chan struct{})
+	ctx, cancel := context.WithCancel(a.chat.lifetime)
+	a.testCancel = cancel
+	go a.runTest(ctx, job)
+	return job.testReceipt, nil
+}
+
+func (a *application) sendTestProgress(job savedTest) {
+	a.testMu.Lock()
+	defer a.testMu.Unlock()
+	a.testActive = job.testReceipt
 }

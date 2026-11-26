@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -136,4 +138,188 @@ func (a *application) applyExactBatch(ctx context.Context, job, id string, revis
 	receipt.NewlyRecycled = receipt.Recycled - receipt.PreviouslyRecycled
 	receipt.Remaining = receipt.Requested - receipt.Recycled
 	return receipt, nil
+}
+
+// Section: Recycling approval and receipt contracts.
+
+type duplicateSelection struct {
+	Keep    int
+	Indices []int
+}
+
+type duplicateRecycleOutcome struct {
+	Kept      string
+	Requested int
+	Recycled  int
+}
+
+type duplicateRecycleReceipt struct {
+	Groups   []duplicateRecycleOutcome
+	Recycled int
+}
+
+// Section: Approved duplicate recycling.
+
+func (a *application) recycleMatchedCopies(ctx context.Context, job string, revision uint64, keep int, selected []int, recycle func(string) error) (int, error) {
+	receipt, err := a.recycleDuplicateGroups(ctx, job, revision, []duplicateSelection{{Keep: keep, Indices: selected}}, recycle)
+	return receipt.Recycled, err
+}
+
+func (a *application) recycleDuplicateGroups(ctx context.Context, job string, revision uint64, groups []duplicateSelection, recycle func(string) error) (duplicateRecycleReceipt, error) {
+	return a.recycleApprovedCopies(ctx, job, revision, groups, false, recycle)
+}
+
+func (a *application) recycleApprovedCopies(ctx context.Context, job string, revision uint64, groups []duplicateSelection, equivalent bool, recycle func(string) error) (duplicateRecycleReceipt, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.s
+	if s == nil || a.v.Job != job || a.v.Revision != revision || a.v.Busy || a.v.Closing || s.pending != nil || s.manifest.Operation != scanDuplicates || s.settings().Execution.Mode == "preview_only" || len(groups) == 0 {
+		return duplicateRecycleReceipt{}, errors.New("Open the current duplicate scan and choose the copies to recycle")
+	}
+	defer a.syncSession(true)
+	return s.recycleCopies(ctx, groups, equivalent, "", recycle)
+}
+
+func (s *session) recycleCopies(ctx context.Context, groups []duplicateSelection, equivalent bool, batchID string, recycle func(string) error) (duplicateRecycleReceipt, error) {
+	var receipt duplicateRecycleReceipt
+	verified := make(map[int]int)
+	if equivalent {
+		for _, group := range s.duplicateResults().Verified {
+			for _, member := range group.Members {
+				verified[member.Index] = group.RecommendedKeeper
+			}
+		}
+	}
+	seen := make(map[int]bool)
+	for _, group := range groups {
+		if seen[group.Keep] || !s.liveDuplicate(group.Keep) || len(group.Indices) == 0 {
+			return receipt, errors.New("Choose one available keeper and at least one copy in each group")
+		}
+		seen[group.Keep] = true
+		keeper := s.plans[group.Keep]
+		for _, index := range group.Indices {
+			if seen[index] || !s.liveDuplicate(index) {
+				return receipt, errors.New("Each selected copy must occur once and be available")
+			}
+			if chosen, ok := verified[index]; equivalent && (!ok || chosen != group.Keep) {
+				return receipt, errors.New("Each selected copy must belong to the keeper's current verified recommendation")
+			}
+			if !equivalent && s.plans[index].Digest != keeper.Digest {
+				return receipt, errors.New("Each selected copy must be byte-identical to its keeper")
+			}
+			seen[index] = true
+		}
+		receipt.Groups = append(receipt.Groups, duplicateRecycleOutcome{Kept: keeper.Path, Requested: len(group.Indices)})
+	}
+	if err := validateRoot(s.manifest.Root); err != nil {
+		return receipt, err
+	}
+	root, err := os.OpenRoot(s.manifest.Root)
+	if err != nil {
+		return receipt, err
+	}
+	defer root.Close()
+	for _, group := range groups {
+		for _, index := range append([]int{group.Keep}, group.Indices...) {
+			plan := s.plans[index]
+			st, err := recheckDuplicate(ctx, root, s.manifest.Root, plan)
+			if err != nil {
+				return receipt, fmt.Errorf("Nothing recycled. %s: %w", filepath.Base(s.plans[index].Path), err)
+			}
+			if equivalent {
+				relative, err := filepath.Rel(s.manifest.Root, plan.Path)
+				if err != nil || duplicateEquivalence(ctx, root, relative, st, plan.Digest) != plan.EquivalentDigest {
+					return receipt, fmt.Errorf("Nothing recycled. Equivalence could not be reverified for %s", filepath.Base(plan.Path))
+				}
+			}
+		}
+	}
+	for i, group := range groups {
+		keeper := s.plans[group.Keep]
+		keptStamp, err := recheckDuplicate(ctx, root, s.manifest.Root, keeper)
+		if err != nil {
+			return receipt, err
+		}
+		for _, index := range group.Indices {
+			if err := ctx.Err(); err != nil {
+				return receipt, err
+			}
+			plan := s.plans[index]
+			proof, err := recheckDuplicate(ctx, root, s.manifest.Root, plan)
+			if err != nil {
+				return receipt, fmt.Errorf("%s: %w", filepath.Base(plan.Path), err)
+			}
+			currentKept, err := fingerprint(keeper.Path)
+			if err != nil || currentKept != keptStamp || safeParent(s.manifest.Root, keeper.Path) != nil {
+				return receipt, errors.New("The copy selected to keep is no longer available")
+			}
+			if err := s.append(record{Type: "recycle-intent", Index: index, Path: plan.Path, Stamp: proof, BatchID: batchID}); err != nil {
+				return receipt, err
+			}
+			recycleErr := recycle(plan.Path)
+			recordErr := s.finishRecycle()
+			if s.plans[index].Decision == removedFlaggedFile {
+				receipt.Groups[i].Recycled++
+				receipt.Recycled++
+			}
+			if err := errors.Join(recycleErr, recordErr); err != nil {
+				return receipt, fmt.Errorf("%s: %w", filepath.Base(plan.Path), err)
+			}
+			if s.plans[index].Decision != removedFlaggedFile {
+				return receipt, fmt.Errorf("The Recycle Bin did not remove %s", filepath.Base(plan.Path))
+			}
+		}
+	}
+	return receipt, nil
+}
+
+// Section: Journal replay for exact batch approval.
+
+func (s *session) acceptExactBatchApproval(r record) {
+	if s.exactBatches == nil {
+		s.exactBatches = make(map[string]*exactRecycleBatch)
+		s.batchRecycled = make(map[string]map[int]bool)
+	}
+	r.ExactBatch.approvedCopies = make(map[int]bool)
+	for _, group := range r.ExactBatch.Groups {
+		for _, index := range group.Indices {
+			r.ExactBatch.approvedCopies[index] = true
+		}
+	}
+	s.exactBatches[r.ExactBatch.ID] = r.ExactBatch
+	s.batchRecycled[r.ExactBatch.ID] = make(map[int]bool)
+}
+
+// Section: Journal replay for recycle result.
+
+func (s *session) acceptRecycleResult(r record) {
+	batchID := s.pending.BatchID
+	s.pending = nil
+	s.planRevision++
+	s.planVersions[r.Index] = s.planRevision
+	if r.Status == "present" {
+		if s.recycleErrors == nil {
+			s.recycleErrors = make(map[int]bool)
+		}
+		s.recycleErrors[r.Index] = true
+	}
+	if r.Status == "absent" {
+		delete(s.recycleErrors, r.Index)
+		if batchID != "" {
+			s.batchRecycled[batchID][r.Index] = true
+		}
+		s.recycled++
+		plan := s.plans[r.Index]
+		s.countFileAssessment(plan, -1)
+		plan.Move, plan.Metadata = nil, nil
+		plan.Digest, plan.TextDigest = "", ""
+		plan.Note, plan.Decision, plan.Reason = "", removedFlaggedFile, "The file is no longer in the scanned folder after a Recycle Bin request"
+		plan.Auto, plan.AutoValidated, plan.Unknown = false, false, false
+		s.countFileAssessment(plan, 1)
+		s.plans[r.Index] = plan
+		delete(s.outcomes, r.Index)
+		if s.manifest.Operation != scanDuplicates {
+			s.reindexPlans()
+		}
+	}
 }

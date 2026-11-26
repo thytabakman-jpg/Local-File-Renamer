@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"unicode/utf8"
 )
+
+// Section: Duplicate group presentation and keeper recommendations.
 
 type duplicateMember struct {
 	Index int
@@ -72,6 +73,8 @@ func (s *session) describeDuplicates(plans []record, reason string) duplicateGro
 	return g
 }
 
+// Section: Text evidence for duplicate comparison.
+
 // Text matching supplements byte identity. It compares a bounded sample and
 // never contributes to the decision to recycle a file.
 func duplicateText(path string, st stamp) string {
@@ -86,6 +89,8 @@ func duplicateText(path string, st stamp) string {
 	text := readEvidenceWith(path, false, defaultSettings()).Text
 	return strings.Join(strings.Fields(strings.ToLower(text)), " ")
 }
+
+// Section: Pair selection and identity revalidation.
 
 type duplicateComparison struct {
 	Verdict, Detail, Recommendation string
@@ -130,6 +135,8 @@ func recheckDuplicate(ctx context.Context, root *os.Root, rootPath string, plan 
 	}
 	return after, nil
 }
+
+// Section: Verified pair comparison.
 
 func (a *application) compareDuplicateFiles(ctx context.Context, job string, first, second int) (duplicateComparison, error) {
 	rootPath, left, right, err := a.duplicatePair(job, first, second)
@@ -198,6 +205,8 @@ func (a *application) compareDuplicateFiles(ctx context.Context, job string, fir
 	return duplicateComparison{"Different complete text", "The full texts differ. There is insufficient evidence to establish how they are related.", "Needs your judgment"}, nil
 }
 
+// Section: Text comparison helpers.
+
 // Complete comparison is limited to bounded, valid UTF-8 text files. Document
 // extraction is sampling only, so it cannot establish content equivalence.
 func comparisonText(ctx context.Context, root *os.Root, rootPath string, plan record, before stamp) (string, bool, error) {
@@ -254,131 +263,3 @@ func duplicateTextOverlap(left, right []string) float64 {
 	return float64(shared) / float64(min(len(l), len(r)))
 }
 
-type duplicateSelection struct {
-	Keep    int
-	Indices []int
-}
-
-type duplicateRecycleOutcome struct {
-	Kept      string
-	Requested int
-	Recycled  int
-}
-
-type duplicateRecycleReceipt struct {
-	Groups   []duplicateRecycleOutcome
-	Recycled int
-}
-
-func (a *application) recycleMatchedCopies(ctx context.Context, job string, revision uint64, keep int, selected []int, recycle func(string) error) (int, error) {
-	receipt, err := a.recycleDuplicateGroups(ctx, job, revision, []duplicateSelection{{Keep: keep, Indices: selected}}, recycle)
-	return receipt.Recycled, err
-}
-
-func (a *application) recycleDuplicateGroups(ctx context.Context, job string, revision uint64, groups []duplicateSelection, recycle func(string) error) (duplicateRecycleReceipt, error) {
-	return a.recycleApprovedCopies(ctx, job, revision, groups, false, recycle)
-}
-
-func (a *application) recycleApprovedCopies(ctx context.Context, job string, revision uint64, groups []duplicateSelection, equivalent bool, recycle func(string) error) (duplicateRecycleReceipt, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	s := a.s
-	if s == nil || a.v.Job != job || a.v.Revision != revision || a.v.Busy || a.v.Closing || s.pending != nil || s.manifest.Operation != scanDuplicates || s.settings().Execution.Mode == "preview_only" || len(groups) == 0 {
-		return duplicateRecycleReceipt{}, errors.New("Open the current duplicate scan and choose the copies to recycle")
-	}
-	defer a.syncSession(true)
-	return s.recycleCopies(ctx, groups, equivalent, "", recycle)
-}
-
-func (s *session) recycleCopies(ctx context.Context, groups []duplicateSelection, equivalent bool, batchID string, recycle func(string) error) (duplicateRecycleReceipt, error) {
-	var receipt duplicateRecycleReceipt
-	verified := make(map[int]int)
-	if equivalent {
-		for _, group := range s.duplicateResults().Verified {
-			for _, member := range group.Members {
-				verified[member.Index] = group.RecommendedKeeper
-			}
-		}
-	}
-	seen := make(map[int]bool)
-	for _, group := range groups {
-		if seen[group.Keep] || !s.liveDuplicate(group.Keep) || len(group.Indices) == 0 {
-			return receipt, errors.New("Choose one available keeper and at least one copy in each group")
-		}
-		seen[group.Keep] = true
-		keeper := s.plans[group.Keep]
-		for _, index := range group.Indices {
-			if seen[index] || !s.liveDuplicate(index) {
-				return receipt, errors.New("Each selected copy must occur once and be available")
-			}
-			if chosen, ok := verified[index]; equivalent && (!ok || chosen != group.Keep) {
-				return receipt, errors.New("Each selected copy must belong to the keeper's current verified recommendation")
-			}
-			if !equivalent && s.plans[index].Digest != keeper.Digest {
-				return receipt, errors.New("Each selected copy must be byte-identical to its keeper")
-			}
-			seen[index] = true
-		}
-		receipt.Groups = append(receipt.Groups, duplicateRecycleOutcome{Kept: keeper.Path, Requested: len(group.Indices)})
-	}
-	if err := validateRoot(s.manifest.Root); err != nil {
-		return receipt, err
-	}
-	root, err := os.OpenRoot(s.manifest.Root)
-	if err != nil {
-		return receipt, err
-	}
-	defer root.Close()
-	for _, group := range groups {
-		for _, index := range append([]int{group.Keep}, group.Indices...) {
-			plan := s.plans[index]
-			st, err := recheckDuplicate(ctx, root, s.manifest.Root, plan)
-			if err != nil {
-				return receipt, fmt.Errorf("Nothing recycled. %s: %w", filepath.Base(s.plans[index].Path), err)
-			}
-			if equivalent {
-				relative, err := filepath.Rel(s.manifest.Root, plan.Path)
-				if err != nil || duplicateEquivalence(ctx, root, relative, st, plan.Digest) != plan.EquivalentDigest {
-					return receipt, fmt.Errorf("Nothing recycled. Equivalence could not be reverified for %s", filepath.Base(plan.Path))
-				}
-			}
-		}
-	}
-	for i, group := range groups {
-		keeper := s.plans[group.Keep]
-		keptStamp, err := recheckDuplicate(ctx, root, s.manifest.Root, keeper)
-		if err != nil {
-			return receipt, err
-		}
-		for _, index := range group.Indices {
-			if err := ctx.Err(); err != nil {
-				return receipt, err
-			}
-			plan := s.plans[index]
-			proof, err := recheckDuplicate(ctx, root, s.manifest.Root, plan)
-			if err != nil {
-				return receipt, fmt.Errorf("%s: %w", filepath.Base(plan.Path), err)
-			}
-			currentKept, err := fingerprint(keeper.Path)
-			if err != nil || currentKept != keptStamp || safeParent(s.manifest.Root, keeper.Path) != nil {
-				return receipt, errors.New("The copy selected to keep is no longer available")
-			}
-			if err := s.append(record{Type: "recycle-intent", Index: index, Path: plan.Path, Stamp: proof, BatchID: batchID}); err != nil {
-				return receipt, err
-			}
-			recycleErr := recycle(plan.Path)
-			recordErr := s.finishRecycle()
-			if s.plans[index].Decision == removedFlaggedFile {
-				receipt.Groups[i].Recycled++
-				receipt.Recycled++
-			}
-			if err := errors.Join(recycleErr, recordErr); err != nil {
-				return receipt, fmt.Errorf("%s: %w", filepath.Base(plan.Path), err)
-			}
-			if s.plans[index].Decision != removedFlaggedFile {
-				return receipt, fmt.Errorf("The Recycle Bin did not remove %s", filepath.Base(plan.Path))
-			}
-		}
-	}
-	return receipt, nil
-}

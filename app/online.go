@@ -18,6 +18,8 @@ import (
 	"time"
 )
 
+// Section: Provider configuration and network client.
+
 const crossrefEndpoint = "https://api.crossref.org/works"
 const wikipediaEndpoint = "https://en.wikipedia.org/w/api.php"
 const braveEndpoint = "https://api.search.brave.com/res/v1/web/search"
@@ -81,6 +83,8 @@ func (w *onlineLookup) get(ctx context.Context, endpoint, provider string, param
 	return nil
 }
 
+// Section: Publication record parsing.
+
 type publicationRecord struct {
 	DOI       string
 	Title     []string
@@ -133,6 +137,8 @@ func (p publicationRecord) source() onlineSource {
 	}
 	return onlineSource{Title: title, URL: "https://doi.org/" + doiPath(p.DOI), Detail: note}
 }
+
+// Section: Citation lookup and source normalization.
 
 var errNoCitation = errors.New("No matching Crossref publication record")
 var errNoBook = errors.New("No matching ISBN edition in Open Library")
@@ -214,6 +220,8 @@ func (w *onlineLookup) byTitle(ctx context.Context, title, author string) (publi
 	}
 	return found, nil
 }
+
+// Section: Publication date verification.
 
 type dateCheck struct {
 	Year, LocalYear, Reason, Provider string
@@ -306,6 +314,69 @@ func confirmDateResult(result dateCheck, year string) dateCheck {
 	return result
 }
 
+// Section: ISBN and book edition verification.
+
+const openLibraryEndpoint = "https://openlibrary.org/api/books"
+
+var isbnMarker = regexp.MustCompile(`(?i)\bISBN(?:-1[03])?\s*:?\s*((?:97[89][ -]?)?(?:\d[ -]?){9}[0-9X])\b`)
+
+func extractISBN(text string) string {
+	for _, m := range isbnMarker.FindAllStringSubmatch(text, -1) {
+		number := strings.ToUpper(strings.NewReplacer(" ", "", "-", "").Replace(m[1]))
+		sum := 0
+		switch len(number) {
+		case 10:
+			for i, c := range number {
+				digit := int(c - '0')
+				if c == 'X' {
+					digit = 10
+				}
+				sum += digit * (10 - i)
+			}
+			if sum%11 == 0 {
+				return number
+			}
+		case 13:
+			for i, c := range number {
+				sum += int(c-'0') * (1 + 2*(i%2))
+			}
+			if sum%10 == 0 {
+				return number
+			}
+		}
+	}
+	return ""
+}
+
+type bookRecord struct {
+	Title, Subtitle, URL string
+	Date                 string `json:"publish_date"`
+}
+
+func (w *onlineLookup) bookByISBN(ctx context.Context, isbn string) (bookRecord, error) {
+	key := "ISBN:" + isbn
+	response := make(map[string]bookRecord)
+	params := url.Values{"bibkeys": {key}, "jscmd": {"data"}, "format": {"json"}}
+	if err := w.get(ctx, openLibraryEndpoint, "Open Library", params, &response); err != nil {
+		return bookRecord{}, err
+	}
+	book, ok := response[key]
+	if !ok || !meaningful(book.Title) {
+		return bookRecord{}, errNoBook
+	}
+	return book, nil
+}
+
+func (b bookRecord) source(isbn string) onlineSource {
+	link := "https://openlibrary.org/isbn/" + isbn
+	if u, err := url.Parse(b.URL); err == nil && u.Host == "openlibrary.org" && u.User == nil && strings.HasPrefix(u.Path, "/books/") {
+		u.Scheme = "https"
+		link = u.String()
+	}
+	return onlineSource{Title: b.Title, Detail: b.Date, URL: link}
+}
+// Section: General web search and provider fallback.
+
 func (w *onlineLookup) search(ctx context.Context, query string) (message string, sources []onlineSource, failure error) {
 	query = strings.TrimSpace(query)
 	if query == "" || len(query) > 400 {
@@ -377,62 +448,25 @@ func (w *onlineLookup) brave(ctx context.Context, query string) (string, []onlin
 	return "Web results from Brave Search.", sources, nil
 }
 
-const openLibraryEndpoint = "https://openlibrary.org/api/books"
+// Section: Scan publication-date verification.
 
-var isbnMarker = regexp.MustCompile(`(?i)\bISBN(?:-1[03])?\s*:?\s*((?:97[89][ -]?)?(?:\d[ -]?){9}[0-9X])\b`)
-
-func extractISBN(text string) string {
-	for _, m := range isbnMarker.FindAllStringSubmatch(text, -1) {
-		number := strings.ToUpper(strings.NewReplacer(" ", "", "-", "").Replace(m[1]))
-		sum := 0
-		switch len(number) {
-		case 10:
-			for i, c := range number {
-				digit := int(c - '0')
-				if c == 'X' {
-					digit = 10
-				}
-				sum += digit * (10 - i)
-			}
-			if sum%11 == 0 {
-				return number
-			}
-		case 13:
-			for i, c := range number {
-				sum += int(c-'0') * (1 + 2*(i%2))
-			}
-			if sum%10 == 0 {
-				return number
+func verifyScanPublicationDate(ctx context.Context, s *session, opts scanSettings, name string, e evidence, a assessment, used bool, rules namingRules, override string, d decision, check inspection) (decision, evidence, inspection) {
+	if s.online != nil && opts.Evidence.OnlineDates != "off" && localPublicationYear(e) == "" &&
+		(d.Kind == "article" || d.Kind == "book" || d.Kind == "academic_book" || extractDOI(chars(e.Text, 2200)) != "") {
+		started := time.Now()
+		confirmed, err := s.online.publicationDate(ctx, name, e)
+		check.OnlineMS = elapsedMS(started)
+		if err != nil {
+			check.PublicationDate = err.Error()
+		} else {
+			check.PublicationDate, check.PublicationSource = confirmed.Reason, confirmed.Source.URL
+			if confirmed.Year != "" {
+				e.Year = confirmed.Year
+				d = decideWithRules(name, e, a, used, rules, override)
+				d.AutoEvidence = false
+				check.PublicationDate = confirmed.Year + " confirmed by " + confirmed.Provider
 			}
 		}
 	}
-	return ""
-}
-
-type bookRecord struct {
-	Title, Subtitle, URL string
-	Date                 string `json:"publish_date"`
-}
-
-func (w *onlineLookup) bookByISBN(ctx context.Context, isbn string) (bookRecord, error) {
-	key := "ISBN:" + isbn
-	response := make(map[string]bookRecord)
-	params := url.Values{"bibkeys": {key}, "jscmd": {"data"}, "format": {"json"}}
-	if err := w.get(ctx, openLibraryEndpoint, "Open Library", params, &response); err != nil {
-		return bookRecord{}, err
-	}
-	book, ok := response[key]
-	if !ok || !meaningful(book.Title) {
-		return bookRecord{}, errNoBook
-	}
-	return book, nil
-}
-
-func (b bookRecord) source(isbn string) onlineSource {
-	link := "https://openlibrary.org/isbn/" + isbn
-	if u, err := url.Parse(b.URL); err == nil && u.Host == "openlibrary.org" && u.User == nil && strings.HasPrefix(u.Path, "/books/") {
-		u.Scheme = "https"
-		link = u.String()
-	}
-	return onlineSource{Title: b.Title, Detail: b.Date, URL: link}
+	return d, e, check
 }
