@@ -332,3 +332,21 @@ func dcProperty(name, value string) string {
 	_ = xml.EscapeText(&text, []byte(value))
 	return fmt.Sprintf("<dc:%s xmlns:dc=%q>%s</dc:%s>", name, dcNamespace, text.String(), name)
 }
+
+// Section: Scan metadata proposal finalization.
+
+func finalizeScanMetadata(s *session, name string, e evidence, a assessment, d decision) decision {
+	if s.manifest.RepairMetadata {
+		d.Metadata = suggestMetadata(name, e, a)
+		if d.Metadata != nil && d.Metadata.Title != "" {
+			d.Metadata.Title = readableTitle(d.Metadata.Title)
+			if d.Metadata.Title == d.Metadata.OldTitle {
+				d.Metadata.Title = ""
+			}
+			if d.Metadata.Title == "" && d.Metadata.Author == "" {
+				d.Metadata = nil
+			}
+		}
+	}
+	return d
+}

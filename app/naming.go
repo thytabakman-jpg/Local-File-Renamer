@@ -108,40 +108,6 @@ func extension(name string) string {
 	return ext
 }
 func baseName(name string) string                { return strings.TrimSuffix(name, extension(name)) }
-func makeName(parts []string, ext string) string { return defaultRules.makeName(parts, ext) }
-
-func (r namingRules) makeName(parts []string, ext string) string {
-	var safe []string
-	for _, part := range parts {
-		part = r.renderPart(strings.Trim(clean(forbidden.ReplaceAllString(part, " ")), " ."))
-		if part != "" {
-			safe = append(safe, part)
-		}
-	}
-	if len(safe) == 0 {
-		return ""
-	}
-	// Keep the leading citation fields and journal/publisher even when the title is long.
-	for windowsNameLength(strings.Join(safe, r.Separator)+ext) > r.MaxLength {
-		longest := 0
-		for i, part := range safe {
-			if len([]rune(part)) > len([]rune(safe[longest])) {
-				longest = i
-			}
-		}
-		runes := []rune(safe[longest])
-		if len(runes) < 8 {
-			break
-		}
-		safe[longest] = strings.TrimRight(string(runes[:len(runes)-1]), " .")
-	}
-	title := strings.Join(safe, r.Separator)
-	if reserved.MatchString(title) {
-		title = "File - " + title
-	}
-	return title + ext
-}
-
 // Section: Course and publication filename parsing.
 
 func getCourse(s string, filename bool) string {
@@ -338,74 +304,6 @@ func validTitleContinuation(line string) bool {
 	return meaningful(line) && !strings.ContainsAny(line, "@{}<>\t") && !strings.HasSuffix(line, ".") &&
 		!titleHeading.MatchString(line) && !strings.HasPrefix(lower, "by ") &&
 		!strings.HasPrefix(lower, "author") && !strings.HasPrefix(lower, "https://")
-}
-
-// Section: Publication classification and citation evidence.
-
-func publicationKind(ext string, e evidence, a assessment) string {
-	if !slices.Contains([]string{".pdf", ".epub", ".docx", ".docm", ".odt"}, ext) {
-		return ""
-	}
-	front := chars(e.Text, 5500)
-	book := e.Kind == "book" || bookSignal.MatchString(front)
-	venue := publicationVenue(front, e)
-	doi := articleDOI.MatchString(chars(front, 2400))
-	articleDetails := venue != "" && journalContext.MatchString(front) ||
-		doi && (publicationDetails.MatchString(front) || articleMarker.MatchString(front)) ||
-		articleMarker.MatchString(front) && publicationDetails.MatchString(front)
-	if e.Kind != "book" && articleDetails {
-		return "article"
-	}
-	if book {
-		if academicBookSignal.MatchString(front + " " + e.Publisher) {
-			return "academic_book"
-		}
-		return "book"
-	}
-	if doi && a.Kind == "article" && oneOfFirstLines(a.Title, front) {
-		return "article"
-	}
-	return ""
-}
-
-func publicationVenue(text string, e evidence) string {
-	if meaningful(e.Venue) {
-		return e.Venue
-	}
-	if m := explicitVenue.FindStringSubmatch(text); m != nil {
-		return clean(m[1])
-	}
-	if venue := clean(journalLine.FindString(text)); meaningful(venue) {
-		return venue
-	}
-	if venue := clean(proceedingsVenue.FindString(text)); venue != "" {
-		return venue
-	}
-	if strings.Contains(strings.ToLower(text), "10.1073/pnas.") {
-		return "PNAS"
-	}
-	return ""
-}
-
-func courseworkCode(name string, e evidence, paper paperName) string {
-	if !slices.Contains([]string{".pdf", ".docx", ".docm", ".doc", ".odt", ".rtf", ".txt"}, strings.ToLower(extension(name))) {
-		return ""
-	}
-	front := chars(e.Text, 2000)
-	for _, m := range courseContext.FindAllStringSubmatch(front, -1) {
-		if code := getCourse(m[1], false); code != "" {
-			return code
-		}
-	}
-	if courseCoverContext.MatchString(front) {
-		if code := getCourse(courseCoverCode.FindString(front), false); code != "" {
-			return code
-		}
-	}
-	if strings.HasPrefix(paper.course, "MCC ") && meaningful(paper.title) && !presentationMarker.MatchString(paper.title) {
-		return paper.course
-	}
-	return ""
 }
 
 // Section: Naming decision dispatch and document naming.

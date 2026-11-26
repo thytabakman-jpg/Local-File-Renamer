@@ -248,26 +248,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		pre = &p
 	}
 	cached, reused, e, readMS := pre.Cached, pre.Reused, pre.Evidence, pre.ReadMS
-	ocrStatus := cached.OCR
-	var ocrMS int64
-	var ocrErr error
-	if !reused && opts.Evidence.UseOCR && strings.EqualFold(extension(item.Path), ".pdf") && transcribe != nil && ctx.Err() == nil &&
-		(len(e.Text) < 35 || opts.Evidence.OCRUnresolved && unresolvedPDF(s, opts, item.Path, name, override, e)) {
-		ocrStart := time.Now()
-		extracted, note, err := scanOCRWithError(ctx, item.Path, transcribe, opts.Evidence.OCRPages)
-		ocrMS, ocrStatus, ocrErr = elapsedMS(ocrStart), note, err
-		if extracted != "" {
-			if len(e.Text) < 35 {
-				e.Text = chars(extracted, opts.Evidence.TextBytes)
-			} else if !strings.Contains(norm(e.Text), norm(extracted)) {
-				e.Text = chars(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+extracted, opts.Evidence.TextBytes)
-			}
-			e.Note, ocrStatus = "", "Read sampled pages"
-		} else {
-			e.Note = joinNote(e.Note, note)
-		}
-	}
-
+	e, ocrStatus, ocrMS, ocrErr := enrichOCREvidence(ctx, s, opts, item, name, override, cached, reused, e, transcribe)
 	if s.manifest.Operation == scanMove {
 		return inspectLocation(ctx, s, assess, opts, item.Path, name, cacheName, *pre, e, ocrStatus, ocrMS, ocrErr, refresh), st, ctx.Err()
 	}
@@ -348,23 +329,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		}
 		check.AIContribution = evidenceBenefit(known, d)
 	}
-	if s.online != nil && opts.Evidence.OnlineDates != "off" && localPublicationYear(e) == "" &&
-		(d.Kind == "article" || d.Kind == "book" || d.Kind == "academic_book" || extractDOI(chars(e.Text, 2200)) != "") {
-		started := time.Now()
-		confirmed, err := s.online.publicationDate(ctx, name, e)
-		check.OnlineMS = elapsedMS(started)
-		if err != nil {
-			check.PublicationDate = err.Error()
-		} else {
-			check.PublicationDate, check.PublicationSource = confirmed.Reason, confirmed.Source.URL
-			if confirmed.Year != "" {
-				e.Year = confirmed.Year
-				d = decideWithRules(name, e, a, used, rules, override)
-				d.AutoEvidence = false
-				check.PublicationDate = confirmed.Year + " confirmed by " + confirmed.Provider
-			}
-		}
-	}
+	d, e, check = verifyScanPublicationDate(ctx, s, opts, name, e, a, used, rules, override, d, check)
 	cleaned := rules.cleanName(d.Name, false)
 	formattingOnlyPDF := s.manifest.Auto && d.Name == name && strings.EqualFold(extension(name), ".pdf")
 	if !formattingOnlyPDF && cleaned != d.Name && (cleaned == name || windowsNameLength(cleaned) <= rules.MaxLength) {
@@ -423,18 +388,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 	d.Inspection = check
 	destination, sortNote := s.sortIndex.suggest(item.Path, e, a, used)
 	d.Folder, d.Note = destination, joinNote(d.Note, sortNote)
-	if s.manifest.RepairMetadata {
-		d.Metadata = suggestMetadata(name, e, a)
-		if d.Metadata != nil && d.Metadata.Title != "" {
-			d.Metadata.Title = readableTitle(d.Metadata.Title)
-			if d.Metadata.Title == d.Metadata.OldTitle {
-				d.Metadata.Title = ""
-			}
-			if d.Metadata.Title == "" && d.Metadata.Author == "" {
-				d.Metadata = nil
-			}
-		}
-	}
+	d = finalizeScanMetadata(s, name, e, a, d)
 	if modelErr != nil && check.AI == modelTimeout && opts.AI.TimeoutSeconds != 180 && hasModelFailure(modelErr, modelTimeout) {
 		d.Note = strings.ReplaceAll(d.Note, "timed out after 3 minutes", fmt.Sprintf("timed out after %d seconds", opts.AI.TimeoutSeconds))
 	}

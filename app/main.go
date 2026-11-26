@@ -132,8 +132,34 @@ func server(a *application) *http.Server {
 		}
 		return true
 	}
-	// Section: Review batch preflight.
+	registerReviewBatchRoutes(a, mux, auth)
+	registerChatRoutes(a, mux, auth)
+	registerFileReviewRoutes(a, mux, auth)
+	registerConnectorAndDiagnosticRoutes(a, mux, auth)
+	registerSettingsRoutes(a, mux, auth)
+	registerRunReportRoutes(a, mux, auth)
+	registerScanStateRoutes(a, mux, auth)
+	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 45 * time.Second, MaxHeaderBytes: 16 << 10}
+	registerOperationReviewRoutes(a, mux, auth)
+	registerActionRoute(a, mux, auth, srv)
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "127.0.0.1:39173" {
+			http.Error(w, "Local requests only", 403)
+			return
+		}
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		mux.ServeHTTP(w, r)
+	})
+	return srv
+}
+// Section: Review batch preflight.
 
+func registerReviewBatchRoutes(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/apply-all", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -154,8 +180,11 @@ func server(a *application) *http.Server {
 		reply(w, map[string]int{"count": len(indices)})
 	})
 	a.registerTestRoutes(mux, auth)
-	// Section: Chat endpoints.
+}
 
+// Section: Chat endpoints.
+
+func registerChatRoutes(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -198,8 +227,11 @@ func server(a *application) *http.Server {
 		}
 		reply(w, response)
 	})
-	// Section: File review endpoints.
+}
 
+// Section: File review endpoints.
+
+func registerFileReviewRoutes(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/file-preview", func(w http.ResponseWriter, r *http.Request) {
 		if auth(w, r) {
 			a.serveFilePreview(w, r)
@@ -223,8 +255,11 @@ func server(a *application) *http.Server {
 		}
 		reply(w, names)
 	})
-	// Section: Desktop connector and operational diagnostics.
+}
 
+// Section: Desktop connector and operational diagnostics.
+
+func registerConnectorAndDiagnosticRoutes(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("POST /api/bridge", a.bridge)
 	mux.HandleFunc("GET /api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
@@ -276,8 +311,11 @@ func server(a *application) *http.Server {
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(data)
 	})
-	// Section: Settings and naming rules.
+}
 
+// Section: Settings and naming rules.
+
+func registerSettingsRoutes(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -294,8 +332,11 @@ func server(a *application) *http.Server {
 			reply(w, a.getRules())
 		}
 	})
-	// Section: Run history and completion reports.
+}
 
+// Section: Run history and completion reports.
+
+func registerRunReportRoutes(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/compare", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -320,8 +361,11 @@ func server(a *application) *http.Server {
 		}
 		reply(w, report)
 	})
-	// Section: Scan state, inspection and exports.
+}
 
+// Section: Scan state, inspection and exports.
+
+func registerScanStateRoutes(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		if auth(w, r) {
 			reply(w, a.snapshot())
@@ -376,9 +420,11 @@ func server(a *application) *http.Server {
 			csvDownload(w, filename, func(c *csv.Writer) error { return a.exportInspections(c, unknown) })
 		}
 	})
-	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 45 * time.Second, MaxHeaderBytes: 16 << 10}
-	// Section: Operation-specific review endpoints.
+}
 
+// Section: Operation-specific review endpoints.
+
+func registerOperationReviewRoutes(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
 	mux.HandleFunc("GET /api/compare-duplicates", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -408,8 +454,11 @@ func server(a *application) *http.Server {
 		}
 		reply(w, results)
 	})
-	// Section: Mutating application command dispatch.
+}
 
+// Section: Mutating application command dispatch.
+
+func registerActionRoute(a *application, mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool, srv *http.Server) {
 	mux.HandleFunc("POST /api/action", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -629,21 +678,8 @@ func server(a *application) *http.Server {
 		}
 		reply(w, map[string]bool{"ok": true})
 	})
-	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != "127.0.0.1:39173" {
-			http.Error(w, "Local requests only", 403)
-			return
-		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			w.Header().Set("Cache-Control", "no-store")
-		}
-		mux.ServeHTTP(w, r)
-	})
-	return srv
 }
+
 // Section: HTTP response utility.
 
 func reply(w http.ResponseWriter, v any) {

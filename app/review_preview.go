@@ -193,3 +193,196 @@ func textPreview(content string) []previewParagraph {
 func mediaPreviewFrame(ctx context.Context, path string) ([]byte, error) {
 	return videoFrame(ctx, path, 0, 850)
 }
+
+// Section: Review projection data contracts.
+
+type proposalRow struct {
+	Index                  int
+	Revision               uint64 `json:",omitempty"`
+	From, To, Note         string
+	Kind, Reason, Decision string
+	Draft                  bool
+	Metadata               *metadataEdit
+}
+type inspectionRow struct {
+	Path, Proposed, Note                        string
+	AutomaticFrom, AutomaticTo, AutomaticReason string
+	AutomaticUndone                             bool
+	Index                                       int
+	Revision                                    uint64 `json:",omitempty"`
+	Kind, Reason, Decision                      string
+	Inspection                                  inspection
+	Unknown                                     bool
+	ReviewActions, Refinement                   bool          `json:",omitempty"`
+	Metadata                                    *metadataEdit `json:",omitempty"`
+	RenameMS                                    int64
+	Outcome                                     string
+}
+type inspectionPage struct {
+	Job   string
+	Rows  []inspectionRow
+	Total int
+}
+
+// Section: Proposal retrieval.
+
+func (a *application) previewPage(offset int) ([]proposalRow, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.previewPageLocked(offset)
+}
+
+type proposalPage struct {
+	Job               string
+	Revision          uint64
+	Total, NextOffset int
+	Rows              []proposalRow
+}
+
+func (a *application) proposalPage(id string, offset int) (proposalPage, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if id != "" && id != a.v.Job {
+		return proposalPage{}, errors.New("The selected run changed")
+	}
+	rows, err := a.previewPageLocked(offset)
+	if err != nil {
+		return proposalPage{}, err
+	}
+	total := a.s.reviewCount() + len(a.cleanup) - a.cleanupThrough
+	next := offset + len(rows)
+	if next >= total || len(rows) == 0 {
+		next = 0
+	}
+	return proposalPage{Job: a.v.Job, Revision: a.s.planRevision, Total: total, NextOffset: next, Rows: rows}, nil
+}
+
+func (a *application) previewPageLocked(offset int) ([]proposalRow, error) {
+	if a.s == nil || a.v.Busy && !a.scanActive || !a.scanActive && (a.v.Phase != "preview" && a.v.Phase != "paused" && a.v.Phase != "complete") || a.s.pending != nil || a.s.automaticRenamePending() {
+		return nil, errors.New("No preview is available")
+	}
+	rows := make([]proposalRow, 0, 100)
+	for _, plan := range a.s.plans[a.s.applyThrough:a.s.reviewEnd()] {
+		hasRename := plan.Move != nil && !a.s.autoCompleted[plan.Index]
+		if !a.s.reviewable(plan) {
+			continue
+		}
+		if offset > 0 {
+			offset--
+			continue
+		}
+		row := proposalRow{Index: plan.Index, Revision: a.s.planVersions[plan.Index], From: a.s.currentPath(plan.Path, plan.Index), Note: plan.Note, Metadata: plan.Metadata, Kind: plan.Kind, Reason: plan.Reason, Decision: planOutcome(plan)}
+		if hasRename {
+			row.To = plan.Move.To
+			if a.s.manifest.Auto && photoExtension(plan.Path) && !a.s.canAutoApply(plan) {
+				if plan.Auto && !a.s.autoHeld[plan.Index] {
+					row.Reason = joinNote(row.Reason, "Enable this category for automatic changes or review it manually")
+				} else {
+					row.Reason = joinNote(row.Reason, "Review required before this image name can be applied")
+				}
+			}
+			if failure := a.s.outcomes[plan.Index]; failure.Type == "single-failed" || failure.Type == "automatic-failed" {
+				row.Note = failure.Note
+			}
+		}
+		rows = append(rows, row)
+		if len(rows) == 100 {
+			break
+		}
+	}
+	if a.scanActive && len(rows) < 100 {
+		start := min(len(a.cleanup), a.cleanupThrough+offset)
+		rows = append(rows, a.cleanup[start:min(len(a.cleanup), start+100-len(rows))]...)
+	}
+	return rows, nil
+}
+
+// Section: Inspection views.
+
+func (a *application) inspections(offset int, unknown bool) (inspectionPage, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inspectionPageLocked(offset, unknown)
+}
+
+func (a *application) reviewInspections(offset int, unknown bool, filter string) (inspectionPage, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inspectionPageFiltered(offset, unknown, filter)
+}
+
+func (a *application) inspectionPageLocked(offset int, unknown bool) (inspectionPage, error) {
+	return a.inspectionPageFiltered(offset, unknown, "")
+}
+
+func (a *application) inspectionPageFiltered(offset int, unknown bool, filter string) (inspectionPage, error) {
+	page := inspectionPage{Job: a.v.Job, Rows: make([]inspectionRow, 0, 100)}
+	if a.s == nil || a.v.Busy && !a.scanActive && a.v.Phase != "reassessing" {
+		return page, errors.New("The inspection report is unavailable during this operation")
+	}
+	for _, r := range a.s.plans {
+		if a.s.manifest.Items[r.Index].Folder || unknown && !r.Unknown {
+			continue
+		}
+		if !reviewMatches(a.s, r, filter) {
+			continue
+		}
+		if page.Total >= offset && len(page.Rows) < 100 {
+			row := inspectionRow{Path: a.s.currentPath(r.Path, r.Index), Note: r.Note, Unknown: r.Unknown, Inspection: r.Inspection, Index: r.Index, Revision: a.s.planVersions[r.Index], Kind: r.Kind, Reason: r.Reason, Decision: planOutcome(r)}
+			if filter == "flagged" || filter == "auto" || filter == "all" {
+				_, _, err := a.flaggedFile(a.v.Job, a.v.Revision, r.Index)
+				row.ReviewActions = err == nil
+				row.Refinement = a.s.canRefine(r.Index)
+				if a.s.reviewable(r) {
+					row.Metadata = r.Metadata
+				}
+			}
+			if automatic, ok := a.s.automaticMoves[r.Index]; ok {
+				row.AutomaticFrom, row.AutomaticTo = automatic.move.From, automatic.move.To
+				row.AutomaticReason = automatic.reason
+				row.AutomaticUndone = automatic.position >= len(a.s.moves)-a.s.undoCount
+			}
+			row.Outcome = planOutcome(r)
+			if result, ok := a.s.outcomes[r.Index]; ok {
+				row.RenameMS, row.Outcome = result.RenameMS, result.Status
+				row.Note = joinNote(r.Note, result.Note)
+			}
+			if r.Move != nil && (!a.s.autoCompleted[r.Index] || a.s.byItem[r.Index].move.To != r.Move.To) {
+				row.Proposed = r.Move.To
+			}
+			page.Rows = append(page.Rows, row)
+		}
+		page.Total++
+	}
+	if filter == "all" || filter == "unassessed" {
+		for index := len(a.s.plans); index < a.s.fileCount; index++ {
+			if page.Total >= offset && len(page.Rows) < 100 {
+				item := a.s.manifest.Items[index]
+				page.Rows = append(page.Rows, inspectionRow{Path: item.Path, Index: index,
+					Decision: "Not assessed", Outcome: "Not assessed", Reason: "Waiting for assessment"})
+			}
+			page.Total++
+		}
+	}
+
+	return page, nil
+}
+
+// Section: Review filter matching.
+
+func reviewMatches(s *session, row record, filter string) bool {
+	decision := planOutcome(row)
+	switch filter {
+	case "kept":
+		return decision == "Name verified" || decision == "Kept existing name" || strings.HasPrefix(decision, "Name kept")
+	case "auto":
+		_, ok := s.automaticMoves[row.Index]
+		return ok
+	case "flagged":
+		return flaggedPlan(row) || s.canRefine(row.Index) || strings.Contains(s.outcomes[row.Index].Note, "Rename failed:")
+	case "unassessed":
+		return decision == "Not assessed"
+	default:
+		return true
+	}
+}

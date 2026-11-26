@@ -7,12 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -128,129 +125,6 @@ type session struct {
 	exactBatches                                                            map[string]*exactRecycleBatch
 	batchRecycled                                                           map[string]map[int]bool
 	recycleErrors                                                           map[int]bool
-}
-
-// Section: Inventory enumeration and scope.
-
-func inventory(ctx context.Context, root string) ([]entry, error) {
-	return inventoryScope(ctx, root, defaultSettings().Scope)
-}
-
-func scopeMatch(path string, list []string, subtree bool) bool {
-	if runtime.GOOS == "windows" {
-		path = strings.ToLower(path)
-	}
-	for _, candidate := range list {
-		candidate = filepath.ToSlash(strings.ReplaceAll(candidate, "\\", "/"))
-		if runtime.GOOS == "windows" {
-			candidate = strings.ToLower(candidate)
-		}
-		if path == candidate || subtree && strings.HasPrefix(path, candidate+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-func inventoryScope(ctx context.Context, root string, scope scanScope) ([]entry, error) {
-	items, _, err := scanInventory(ctx, root, scope)
-	return items, err
-}
-
-func scanInventory(ctx context.Context, root string, scope scanScope) ([]entry, inventoryCounts, error) {
-	var files, dirs []entry
-	var counts inventoryCounts
-	types := make(map[string]bool)
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if stop := ctx.Err(); stop != nil {
-			return stop
-		}
-		if path == root {
-			return err
-		}
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-		excluded := scopeMatch(rel, scope.ExcludePaths, true)
-		if d != nil && d.IsDir() && (excluded || !scope.Subfolders) {
-			counts.OmittedFolders++
-			return filepath.SkipDir
-		}
-		if d == nil || !d.IsDir() {
-			ext := extension(path)
-			matchExt := func(list []string) bool {
-				return slices.ContainsFunc(list, func(value string) bool { return strings.EqualFold(value, ext) }) || ext != filepath.Ext(path) && slices.ContainsFunc(list, func(value string) bool { return strings.EqualFold(value, filepath.Ext(path)) })
-			}
-			excluded = excluded || len(scope.IncludePaths) > 0 && !scopeMatch(rel, scope.IncludePaths, true) ||
-				len(scope.SelectedPaths) > 0 && !scopeMatch(rel, scope.SelectedPaths, false) ||
-				len(scope.IncludeExtensions) > 0 && !matchExt(scope.IncludeExtensions) || matchExt(scope.ExcludeExtensions)
-		}
-		if err != nil {
-			counts.Unavailable++
-			if !excluded {
-				files = append(files, entry{Path: path, Skip: true, Note: "Unable to inspect: " + err.Error()})
-			}
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			counts.Unavailable++
-			if !excluded {
-				files = append(files, entry{Path: path, Skip: true, Note: "Unable to inspect: " + err.Error()})
-			}
-			return nil
-		}
-		if linked(info) {
-			counts.Unavailable++
-			if !excluded {
-				files = append(files, entry{Path: path, Skip: true, Note: "Link, junction or reparse point"})
-			}
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			counts.Folders++
-			if len(scope.SelectedPaths) == 0 && (len(scope.IncludePaths) == 0 || scopeMatch(rel, scope.IncludePaths, true)) {
-				dirs = append(dirs, entry{Path: path, Folder: true})
-			}
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			counts.Unavailable++
-			if !excluded {
-				files = append(files, entry{Path: path, Skip: true, Note: "Special file"})
-			}
-			return nil
-		}
-		counts.Found++
-		if ext := strings.ToLower(filepath.Ext(path)); ext != "" {
-			types[ext] = true
-		}
-		if excluded || info.Size() < scope.MinBytes || scope.MaxBytes > 0 && info.Size() > scope.MaxBytes {
-			counts.Filtered++
-			return nil
-		}
-		counts.Included++
-		item := entry{Path: path, Modified: info.ModTime().UnixNano()}
-		if scope.VerifyComparison {
-			hash, err := comparisonHash(ctx, path)
-			if err != nil {
-				return err
-			}
-			item.Hash = hash
-		}
-		files = append(files, item)
-		return nil
-	})
-	for ext := range types {
-		counts.FileTypes = append(counts.FileTypes, ext)
-	}
-	slices.Sort(counts.FileTypes)
-	sort.SliceStable(dirs, func(i, j int) bool {
-		return strings.Count(dirs[i].Path, string(os.PathSeparator)) > strings.Count(dirs[j].Path, string(os.PathSeparator))
-	})
-	return append(files, dirs...), counts, err
 }
 
 // Section: Session creation, restoration and closure.
@@ -516,16 +390,7 @@ func (s *session) accept(r record) {
 	case "scan-mode":
 		s.partial = r.Partial
 	case "image-refinement", "plan-revision":
-		if r.Type == "image-refinement" {
-			delete(s.autoCompleted, r.Index)
-		}
-		s.countFileAssessment(s.plans[r.Index], -1)
-		s.countFileAssessment(r, 1)
-		s.plans[r.Index] = r
-		delete(s.outcomes, r.Index)
-		s.planRevision++
-		s.planVersions[r.Index] = s.planRevision
-		s.reindexPlans()
+		s.acceptPlanRevision(r)
 	case "plan":
 		s.countFileAssessment(r, 1)
 		s.plans = append(s.plans, r)
@@ -533,84 +398,21 @@ func (s *session) accept(r record) {
 		s.planVersions = append(s.planVersions, s.planRevision)
 		s.indexPlan(r)
 	case "apply-selection":
-		for _, override := range r.MoveOverrides {
-			plan := &s.plans[override.Index]
-			move := override.Move
-			plan.Move = &move
-			plan.Reason = "The operator approved a different destination folder"
-			s.planRevision++
-			s.planVersions[override.Index] = s.planRevision
-		}
-		if len(r.MoveOverrides) != 0 {
-			s.reindexPlans()
-		}
-		s.selection = append([]int(nil), r.Selection...)
+		s.acceptApplySelection(r)
 	case "selection-done":
 		s.selection = s.selection[1:]
 	case "selected-metadata":
 		s.metadataPlans = append(s.metadataPlans, s.plans[r.Index])
 	case "approved", "apply-batch":
-		s.planRevision++
-		end := r.Index
-		if r.Type == "approved" { // Releases 2.0 and 2.1 saved a single full-run approval.
-			end = len(s.plans)
-		}
-		for _, i := range r.Excluded {
-			s.excluded[i] = true
-		}
-		for _, plan := range s.plans[s.applyThrough:end] {
-			if plan.Metadata != nil && !s.excluded[plan.Index] {
-				s.metadataPlans = append(s.metadataPlans, plan)
-			}
-		}
-		s.applyThrough = end
+		s.acceptBatchApproval(r)
 	case "advance":
 		s.index = r.Index + 1
 	case "intent", "undo-intent", "single-intent", "metadata-intent", "metadata-undo-intent", "recycle-intent":
 		s.pending = &r
 	case "exact-batch-approved":
-		if s.exactBatches == nil {
-			s.exactBatches = make(map[string]*exactRecycleBatch)
-			s.batchRecycled = make(map[string]map[int]bool)
-		}
-		r.ExactBatch.approvedCopies = make(map[int]bool)
-		for _, group := range r.ExactBatch.Groups {
-			for _, index := range group.Indices {
-				r.ExactBatch.approvedCopies[index] = true
-			}
-		}
-		s.exactBatches[r.ExactBatch.ID] = r.ExactBatch
-		s.batchRecycled[r.ExactBatch.ID] = make(map[int]bool)
+		s.acceptExactBatchApproval(r)
 	case "recycle-result":
-		batchID := s.pending.BatchID
-		s.pending = nil
-		s.planRevision++
-		s.planVersions[r.Index] = s.planRevision
-		if r.Status == "present" {
-			if s.recycleErrors == nil {
-				s.recycleErrors = make(map[int]bool)
-			}
-			s.recycleErrors[r.Index] = true
-		}
-		if r.Status == "absent" {
-			delete(s.recycleErrors, r.Index)
-			if batchID != "" {
-				s.batchRecycled[batchID][r.Index] = true
-			}
-			s.recycled++
-			plan := s.plans[r.Index]
-			s.countFileAssessment(plan, -1)
-			plan.Move, plan.Metadata = nil, nil
-			plan.Digest, plan.TextDigest = "", ""
-			plan.Note, plan.Decision, plan.Reason = "", removedFlaggedFile, "The file is no longer in the scanned folder after a Recycle Bin request"
-			plan.Auto, plan.AutoValidated, plan.Unknown = false, false, false
-			s.countFileAssessment(plan, 1)
-			s.plans[r.Index] = plan
-			delete(s.outcomes, r.Index)
-			if s.manifest.Operation != scanDuplicates {
-				s.reindexPlans()
-			}
-		}
+		s.acceptRecycleResult(r)
 	case "plan-auto-blocked":
 		s.pending = nil
 		s.flags = append(s.flags, r)
@@ -623,49 +425,7 @@ func (s *session) accept(r record) {
 			s.pending = nil
 		}
 	case "result":
-		if r.Move != nil && s.automaticMoves != nil && r.Auto && s.pending != nil && s.pending.Type == "intent" {
-			reason := "Matched the automatic naming rules"
-			if r.Index < len(s.plans) && s.plans[r.Index].Reason != "" {
-				reason = s.plans[r.Index].Reason
-			}
-			s.automaticMoves[r.Index] = indexedMove{move: *r.Move, position: len(s.moves), reason: reason}
-		}
-		s.planRevision++
-		if r.Index < len(s.planVersions) {
-			s.planVersions[r.Index] = s.planRevision
-		}
-		s.pending = nil
-		if r.Auto {
-			s.autoCompleted[r.Index] = true
-		} else if r.Index >= s.index {
-			s.index = r.Index + 1
-		}
-		if r.Index >= 0 && r.Index < len(s.plans) && s.plans[r.Index].Note != "" {
-			s.resolvedPlanFlags++
-		}
-		switch r.Status {
-		case "renamed":
-			s.renamed++
-		case "moved":
-			s.renamed++
-			s.moved++
-		case "kept":
-			s.kept++
-		case "skipped":
-			s.skipped++
-		}
-		if r.Note != "" {
-			s.flags = append(s.flags, r)
-		}
-		if r.Move != nil {
-			im := indexedMove{move: *r.Move, position: len(s.moves)}
-			s.byItem[r.Index] = im
-			s.moveIndexByTarget[r.Move.To] = r.Index
-			if r.Move.Stamp.Dir {
-				s.folderByPath[r.Move.From] = im
-			}
-			s.moves = append(s.moves, *r.Move)
-		}
+		s.acceptRenameResult(r)
 	case "metadata-result":
 		s.pending = nil
 		s.metadataIndex++
@@ -1111,4 +871,86 @@ func joinNote(a, b string) string {
 func (s *session) canRefine(index int) bool {
 	return index >= s.applyThrough && index >= 0 && index < len(s.plans) && s.plans[index].Rough &&
 		s.autoCompleted[index] && s.byItem[index].move.To != "" && s.undoCount == 0
+}
+
+// Section: Atomic JSON persistence.
+
+func atomicJSON(path string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".renamer-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	_, err = f.Write(data)
+	if err = errors.Join(err, f.Close()); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
+// Section: Journal replay for plan revision.
+
+func (s *session) acceptPlanRevision(r record) {
+	if r.Type == "image-refinement" {
+		delete(s.autoCompleted, r.Index)
+	}
+	s.countFileAssessment(s.plans[r.Index], -1)
+	s.countFileAssessment(r, 1)
+	s.plans[r.Index] = r
+	delete(s.outcomes, r.Index)
+	s.planRevision++
+	s.planVersions[r.Index] = s.planRevision
+	s.reindexPlans()
+}
+
+// Section: Journal replay for rename result.
+
+func (s *session) acceptRenameResult(r record) {
+	if r.Move != nil && s.automaticMoves != nil && r.Auto && s.pending != nil && s.pending.Type == "intent" {
+		reason := "Matched the automatic naming rules"
+		if r.Index < len(s.plans) && s.plans[r.Index].Reason != "" {
+			reason = s.plans[r.Index].Reason
+		}
+		s.automaticMoves[r.Index] = indexedMove{move: *r.Move, position: len(s.moves), reason: reason}
+	}
+	s.planRevision++
+	if r.Index < len(s.planVersions) {
+		s.planVersions[r.Index] = s.planRevision
+	}
+	s.pending = nil
+	if r.Auto {
+		s.autoCompleted[r.Index] = true
+	} else if r.Index >= s.index {
+		s.index = r.Index + 1
+	}
+	if r.Index >= 0 && r.Index < len(s.plans) && s.plans[r.Index].Note != "" {
+		s.resolvedPlanFlags++
+	}
+	switch r.Status {
+	case "renamed":
+		s.renamed++
+	case "moved":
+		s.renamed++
+		s.moved++
+	case "kept":
+		s.kept++
+	case "skipped":
+		s.skipped++
+	}
+	if r.Note != "" {
+		s.flags = append(s.flags, r)
+	}
+	if r.Move != nil {
+		im := indexedMove{move: *r.Move, position: len(s.moves)}
+		s.byItem[r.Index] = im
+		s.moveIndexByTarget[r.Move.To] = r.Index
+		if r.Move.Stamp.Dir {
+			s.folderByPath[r.Move.From] = im
+		}
+		s.moves = append(s.moves, *r.Move)
+	}
 }

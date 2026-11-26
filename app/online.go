@@ -448,3 +448,25 @@ func (w *onlineLookup) brave(ctx context.Context, query string) (string, []onlin
 	return "Web results from Brave Search.", sources, nil
 }
 
+// Section: Scan publication-date verification.
+
+func verifyScanPublicationDate(ctx context.Context, s *session, opts scanSettings, name string, e evidence, a assessment, used bool, rules namingRules, override string, d decision, check inspection) (decision, evidence, inspection) {
+	if s.online != nil && opts.Evidence.OnlineDates != "off" && localPublicationYear(e) == "" &&
+		(d.Kind == "article" || d.Kind == "book" || d.Kind == "academic_book" || extractDOI(chars(e.Text, 2200)) != "") {
+		started := time.Now()
+		confirmed, err := s.online.publicationDate(ctx, name, e)
+		check.OnlineMS = elapsedMS(started)
+		if err != nil {
+			check.PublicationDate = err.Error()
+		} else {
+			check.PublicationDate, check.PublicationSource = confirmed.Reason, confirmed.Source.URL
+			if confirmed.Year != "" {
+				e.Year = confirmed.Year
+				d = decideWithRules(name, e, a, used, rules, override)
+				d.AutoEvidence = false
+				check.PublicationDate = confirmed.Year + " confirmed by " + confirmed.Provider
+			}
+		}
+	}
+	return d, e, check
+}
