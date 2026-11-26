@@ -2,6 +2,8 @@
 
 Version 4.0 reorganises scan setup, review and reporting, file-move planning, and HTTP route registration without intentionally changing existing behaviour or interfaces.
 
+**Source and release versions:** The version in this README identifies the source on `main`, not necessarily the latest published [GitHub release](https://github.com/thytabakman-jpg/Local-File-Renamer/releases). Use the installer from the matching release tag (`v4.0` for this source), or build it from this source using the instructions below. An older release is not an installer for the current source version.
+
 Local File Renamer for Windows x64 proposes filename changes and file moves, and checks for duplicates. Setup installs for the current user and adds a Start menu shortcut. The launcher opens the app at `http://127.0.0.1:39173/`.
 
 ## Scan and review
