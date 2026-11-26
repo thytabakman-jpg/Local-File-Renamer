@@ -197,34 +197,30 @@ func atomicJSON(path string, value any) error {
 	return os.Rename(f.Name(), path)
 }
 
-func (a *application) getRules() ruleSet {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return ruleSet{Revision: a.profiles.Revision, Rules: a.activeSettings().Naming, Formats: namingFormats}
-}
-
-func (a *application) updateRules(revision uint64, r namingRules) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	settings := a.activeSettings()
-	if r.Capitalization == "" {
-		r.Capitalization = settings.Naming.Capitalization
+func (r namingRules) normalizeGeneratedName(current, candidate string) string {
+	if strings.EqualFold(current, candidate) && strings.ToUpper(baseName(current)) != baseName(current) {
+		return current
 	}
-	if r.Separator == "" {
-		r.Separator = settings.Naming.Separator
+	stem, ext := baseName(candidate), extension(candidate)
+	parts := strings.Split(stem, r.Separator)
+	for i, part := range parts {
+		if codeWithUnderscore.MatchString(part) {
+			continue
+		}
+		if r.Capitalization == "sentence" {
+			parts[i] = r.renderPart(part)
+		} else {
+			parts[i] = readableTitle(part)
+		}
+		// Retain the creator's mixed-case wording and spacing in parts that
+		// were already readable. The normal naming rules handle any cleanup.
+		if strings.ToUpper(part) != part {
+			parts[i] = part
+		}
 	}
-	if r.MaxLength == 0 {
-		r.MaxLength = settings.Naming.MaxLength
+	normalized := strings.Join(parts, r.Separator) + ext
+	if !r.protect(current, normalized) {
+		return current
 	}
-	if r.AuthorFormat == "" {
-		r.AuthorFormat = settings.Naming.AuthorFormat
-	}
-	if r.VersionFormat == "" {
-		r.VersionFormat = settings.Naming.VersionFormat
-	}
-	settings.Naming = r
-	if err := validateSettings(settings); err != nil {
-		return err
-	}
-	return a.saveProfileLocked(revision, a.profiles.Active, &settings, true)
+	return normalized
 }

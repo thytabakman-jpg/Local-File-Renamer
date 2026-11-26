@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-var classifications = []string{"article", "academic_book", "book", "course_paper", "presentation", "other"}
-
 func (a *application) liveReview() bool {
 	return a.scanActive && (a.v.Phase == "files" || a.v.Phase == "folders")
 }
@@ -271,4 +269,3 @@ func (a *application) undoJobRevision(id string, revision *uint64) error {
 	}
 	return a.undoLocked()
 }
-

@@ -78,34 +78,6 @@ func decideImage(name string, e evidence, a assessment, modelUsed bool, rules na
 	return d
 }
 
-func (r namingRules) normalizeGeneratedName(current, candidate string) string {
-	if strings.EqualFold(current, candidate) && strings.ToUpper(baseName(current)) != baseName(current) {
-		return current
-	}
-	stem, ext := baseName(candidate), extension(candidate)
-	parts := strings.Split(stem, r.Separator)
-	for i, part := range parts {
-		if codeWithUnderscore.MatchString(part) {
-			continue
-		}
-		if r.Capitalization == "sentence" {
-			parts[i] = r.renderPart(part)
-		} else {
-			parts[i] = readableTitle(part)
-		}
-		// Retain the creator's mixed-case wording and spacing in parts that
-		// were already readable. The normal naming rules handle any cleanup.
-		if strings.ToUpper(part) != part {
-			parts[i] = part
-		}
-	}
-	normalized := strings.Join(parts, r.Separator) + ext
-	if !r.protect(current, normalized) {
-		return current
-	}
-	return normalized
-}
-
 var explicitMediaVersion = regexp.MustCompile(`(?i)(?:\s*[-–—])?\s+(?:version\s+|v)([1-9]\d*(?:\.\d+)*)$`)
 
 func imageVersionGroups(items []entry) (map[int]string, map[int]bool) {
