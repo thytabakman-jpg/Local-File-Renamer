@@ -57,3 +57,5 @@ func checklistText(checks []classificationCheck) string {
 	}
 	return strings.Join(fields, " | ")
 }
+
+var classifications = []string{"article", "academic_book", "book", "course_paper", "presentation", "other"}
