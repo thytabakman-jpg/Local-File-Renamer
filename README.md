@@ -138,7 +138,7 @@ Run from the repository root with the Go version pinned in `go.mod` and required
 
 ```sh
 go version
-go build ./app
+go build -o /tmp/local-file-renamer ./app
 go vet ./...
 go test -count=1 ./...
 go test -race -count=1 ./app
