@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -96,4 +97,67 @@ func inspectLocation(ctx context.Context, s *session, assess assessFile, opts sc
 	check.Location = choice.Evidence
 	d.Inspection = check
 	return d
+}
+
+func (s *session) buildMoveSuggestion(index int, d decision, st stamp, revision bool) record {
+	item := s.manifest.Items[index]
+	r := record{Type: "plan", Index: index, Path: item.Path, Kind: d.Kind,
+		Inspection: d.Inspection, Reason: d.Reason, Note: d.Note, Stamp: st, Decision: "Location kept"}
+	if revision {
+		r.Type = "plan-revision"
+	}
+	if item.Folder {
+		r.Decision = "Folder indexed"
+		return r
+	}
+	if item.Skip || st.ID == "" {
+		r.Decision = "Skipped"
+		return r
+	}
+	if d.Folder == "" || samePath(d.Folder, filepath.Dir(item.Path)) {
+		if d.Outcome != "" {
+			r.Decision = d.Outcome
+		}
+		return r
+	}
+	if !within(s.manifest.Root, d.Folder) {
+		r.Note = "The destination is outside the selected folder"
+		return r
+	}
+	m := move{From: item.Path, To: filepath.Join(d.Folder, filepath.Base(item.Path)), Stamp: st, NewFolder: d.NewFolder}
+	source, err := fingerprint(filepath.Dir(m.From))
+	if err != nil || !source.Dir {
+		r.Note = "The source folder could not be verified"
+		return r
+	}
+	m.SourceParent = source.ID
+	if m.NewFolder {
+		ancestor, err := fingerprint(filepath.Dir(d.Folder))
+		if err != nil || !ancestor.Dir {
+			r.Note = "The proposed folder's parent could not be verified"
+			return r
+		}
+		m.TargetAncestor = ancestor.ID
+	} else {
+		target, err := fingerprint(d.Folder)
+		if err != nil || !target.Dir {
+			r.Note = "The destination folder could not be verified"
+			return r
+		}
+		m.TargetParent = target.ID
+	}
+	if err := s.validateMoveParents(m); err != nil {
+		r.Note = err.Error()
+		return r
+	}
+	available := s.availableForPlan
+	if revision && s.plans[index].Move != nil && samePath(s.plans[index].Move.To, m.To) {
+		available = nameAvailable
+	}
+	if err := available(m.From, m.To); err != nil {
+		r.Note = err.Error()
+		return r
+	}
+	r.Move, r.Decision = &m, "Move proposed"
+	return r
 }

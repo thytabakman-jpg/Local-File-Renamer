@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -182,4 +183,94 @@ func (s *session) overrideMoveDestination(m move, destination string) (move, err
 	default:
 		return m, errors.New("The destination is not an available folder")
 	}
+}
+
+type moveFolder struct {
+	Path, Parent string
+	New          bool
+	Proposals    []proposalRow
+}
+
+func (s *session) moveFolders() []moveFolder {
+	root := s.manifest.Root
+	folders := map[string]*moveFolder{root: {Path: root}}
+	for _, item := range s.manifest.Items {
+		if item.Folder && !item.Skip && within(root, item.Path) && item.Path != root {
+			folders[item.Path] = &moveFolder{Path: item.Path, Parent: filepath.Dir(item.Path)}
+		}
+	}
+	for _, plan := range s.plans {
+		if plan.Move == nil || !s.reviewable(plan) || s.excluded[plan.Index] {
+			continue
+		}
+		m := plan.Move
+		path := filepath.Dir(m.To)
+		folder := folders[path]
+		if folder == nil {
+			folder = &moveFolder{Path: path, Parent: filepath.Dir(path), New: m.NewFolder}
+			folders[path] = folder
+		}
+		if folder.New && safeParent(root, m.To) == nil {
+			folder.New = false
+		}
+		note := plan.Note
+		if failure := s.outcomes[plan.Index]; failure.Type == "single-failed" {
+			note = failure.Note
+		}
+		folder.Proposals = append(folder.Proposals, proposalRow{
+			Index: plan.Index, Revision: s.planVersions[plan.Index], From: m.From, To: m.To, Note: note, Reason: plan.Reason,
+		})
+	}
+	paths := make([]string, 0, len(folders))
+	for path := range folders {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	rows := make([]moveFolder, 0, len(paths))
+	for _, path := range paths {
+		row := folders[path]
+		if path != root && folders[row.Parent] == nil {
+			row.Parent = root
+		}
+		rows = append(rows, *row)
+	}
+	return rows
+}
+
+func (s *session) validateProposedFolder(m move) error {
+	root, folder := s.manifest.Root, filepath.Dir(m.To)
+	if err := safeParent(root, m.From); err != nil {
+		return err
+	}
+	source, err := fingerprint(filepath.Dir(m.From))
+	if err != nil || !source.Dir || source.ID != m.SourceParent {
+		return errors.New("The source folder changed after the scan")
+	}
+	if err := safeParent(root, folder); err != nil {
+		return err
+	}
+	if !validProposedName(filepath.Base(folder), "", true) {
+		return errors.New("The proposed folder name is invalid")
+	}
+	ancestor, err := fingerprint(filepath.Dir(folder))
+	if err != nil || !ancestor.Dir || ancestor.ID != m.TargetAncestor {
+		return errors.New("The proposed folder's parent changed after the scan")
+	}
+	return nil
+}
+
+func (s *session) prepareMoveFolder(m *move) error {
+	if err := s.validateProposedFolder(*m); err != nil {
+		return err
+	}
+	folder := filepath.Dir(m.To)
+	if err := os.Mkdir(folder, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	target, err := fingerprint(folder)
+	if err != nil || !target.Dir {
+		return errors.New("The proposed folder is unavailable or is a link")
+	}
+	m.TargetParent = target.ID
+	return s.validateMoveParents(*m)
 }
