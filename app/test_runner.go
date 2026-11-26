@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+// Section: Experiment evidence and result contracts.
+
 type testFileResult struct {
 	File, Result, Expected, Verdict string
 	Status, Reason, Note, Applied   string
@@ -38,6 +40,8 @@ type testFinding struct {
 	Rows                               []testFileResult
 	Groups                             []testDuplicateResult
 }
+
+// Section: Frozen input identity and copying.
 
 func testPathKey(path string) string {
 	if runtime.GOOS == "windows" {
@@ -135,6 +139,8 @@ func copyTestFile(ctx context.Context, root *os.Root, rel, dst string, original 
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
+
+// Section: Experiment orchestration and variant execution.
 
 func (a *application) runTest(ctx context.Context, job savedTest) {
 	dir := filepath.Join(a.home, "tests", job.Job)
@@ -348,6 +354,8 @@ func (a *application) runTestVariant(ctx context.Context, variant testVariant, o
 	return
 }
 
+// Section: Finding aggregation.
+
 func (f *testFinding) countVerdicts() {
 	f.Selected = len(f.Rows)
 	for _, row := range f.Rows {
@@ -361,6 +369,8 @@ func (f *testFinding) countVerdicts() {
 		}
 	}
 }
+
+// Section: Baseline reconstruction.
 
 func (a *application) readBaselineVariant(ctx context.Context, v testVariant, frozen string, items []entry, refs map[string]testExpectation) testFinding {
 	f := testFinding{Name: v.Name, Operation: v.Operation, Status: "failed"}
@@ -407,6 +417,8 @@ func (a *application) readBaselineVariant(ctx context.Context, v testVariant, fr
 	f.countVerdicts()
 	return f
 }
+
+// Section: Disposable-copy mutation testing.
 
 func applyTestVariant(ctx context.Context, runner *application, groups operationResults) error {
 	s := runner.s
@@ -456,6 +468,8 @@ func applyTestVariant(ctx context.Context, runner *application, groups operation
 	return nil
 }
 
+// Section: Resource measurement.
+
 func sampleTestMemory() func() uint64 {
 	stop := make(chan struct{})
 	result := make(chan uint64, 1)
@@ -480,6 +494,8 @@ func sampleTestMemory() func() uint64 {
 		return <-result
 	}
 }
+
+// Section: Outcome summary and criterion evaluation.
 
 func testHeadline(job savedTest) string {
 	if job.InputError != "" {

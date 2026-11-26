@@ -9,6 +9,8 @@ import (
 	"unicode"
 )
 
+// Section: Assessment and naming decision contracts.
+
 type assessment struct {
 	Kind               string   `json:"kind"`
 	Title              string   `json:"title"`
@@ -33,6 +35,8 @@ type decision struct {
 	Unknown, Strict, AutoEvidence bool
 	ReplaceDownloadID             bool
 }
+
+// Section: Filename and publication evidence patterns.
 
 var coursePattern = regexp.MustCompile(`(?i)\b([A-Z]{2,5})[ _-]*([1-9][0-9]{2,3}[A-Z]?)\b`)
 var courseFilename = regexp.MustCompile(`(?i)(?:^| - )([A-Z]{2,5})[ _-]*([1-9][0-9]{2,3}[A-Z]?)(?:$| - )`)
@@ -69,6 +73,8 @@ var bookSignal = regexp.MustCompile(`(?i)\b(?:ISBN(?:-1[03])?\s*:?\s*(?:97[89][ 
 var titleHeading = regexp.MustCompile(`(?i)^(?:abstract|contents|table of contents|chapter\s+\d|copyright|all rights reserved|untitled|doi\b|ISBN\b)`)
 var yearLine = regexp.MustCompile(`(?im)^.{0,38}(?:copyright|©|published|publication date|\bvolume\b).{0,95}$`)
 var punctuation = regexp.MustCompile(`[^\pL\pN]+`)
+
+// Section: General naming and normalization primitives.
 
 func norm(s string) string {
 	return strings.TrimSpace(punctuation.ReplaceAllString(strings.ToLower(s), " "))
@@ -135,6 +141,8 @@ func (r namingRules) makeName(parts []string, ext string) string {
 	}
 	return title + ext
 }
+
+// Section: Course and publication filename parsing.
 
 func getCourse(s string, filename bool) string {
 	p := coursePattern
@@ -254,6 +262,8 @@ func citationParts(stem string) (author, year, title, venue string) {
 	}
 	return
 }
+// Section: Author and title evidence handling.
+
 func familyName(author string) string {
 	a := strings.TrimSpace(author)
 	if head, _, found := strings.Cut(a, ","); found {
@@ -330,6 +340,8 @@ func validTitleContinuation(line string) bool {
 		!strings.HasPrefix(lower, "author") && !strings.HasPrefix(lower, "https://")
 }
 
+// Section: Publication classification and citation evidence.
+
 func publicationKind(ext string, e evidence, a assessment) string {
 	if !slices.Contains([]string{".pdf", ".epub", ".docx", ".docm", ".odt"}, ext) {
 		return ""
@@ -395,6 +407,8 @@ func courseworkCode(name string, e evidence, paper paperName) string {
 	}
 	return ""
 }
+
+// Section: Naming decision dispatch and document naming.
 
 func decide(name string, e evidence, a assessment, modelUsed bool) decision {
 	return decideWithRules(name, e, a, modelUsed, defaultRules, "")
@@ -599,6 +613,8 @@ func decideWithRules(name string, e evidence, a assessment, modelUsed bool, rule
 	}
 	return decideGeneral(name, e, a, modelUsed, rules)
 }
+
+// Section: General title evaluation and fallback naming.
 
 func matchingFrontTitle(stem, text string) string {
 	for _, line := range textLines(chars(text, 2200)) {

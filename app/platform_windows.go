@@ -13,6 +13,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// Section: Filesystem identity and path handling.
+
 func linked(info os.FileInfo) bool {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return true
@@ -47,6 +49,8 @@ func identity(path string, _ os.FileInfo) (string, error) {
 	}
 	return fmt.Sprintf("%x:%x:%x", f.VolumeSerialNumber, f.FileIndexHigh, f.FileIndexLow), nil
 }
+// Section: Filesystem mutation and recycling.
+
 func renameNoReplace(from, to string) error {
 	a, err := windows.UTF16PtrFromString(winPath(from))
 	if err != nil {
@@ -137,10 +141,6 @@ func recycleFile(path string) error {
 	}
 	return nil
 }
-func configureChild(c *exec.Cmd) {
-	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000 | 0x00004000}
-}
-
 func replaceExisting(from, to string) error {
 	a, err := windows.UTF16PtrFromString(winPath(from))
 	if err != nil {
@@ -158,18 +158,8 @@ func replaceExisting(from, to string) error {
 	return nil
 }
 
-func configureModelPriority(c *exec.Cmd, priority string) {
-	configureChild(c)
-	switch priority {
-	case "normal":
-		c.SysProcAttr.CreationFlags = 0x08000000
-	case "idle":
-		c.SysProcAttr.CreationFlags = 0x08000000 | 0x00000040
-	}
-}
-func applyModelPriority(_ *exec.Cmd, _ string) {}
+// Section: Native folder selection.
 
-// The picker runs in a child so closing the app cancels the modal dialog.
 func nativeFolderPicker(start string) (string, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -255,6 +245,24 @@ func nativeFolderPicker(start string) (string, error) {
 	return value, nil
 }
 
+// Section: Child process configuration and memory measurement.
+
+func configureChild(c *exec.Cmd) {
+	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000 | 0x00004000}
+}
+
+func configureModelPriority(c *exec.Cmd, priority string) {
+	configureChild(c)
+	switch priority {
+	case "normal":
+		c.SysProcAttr.CreationFlags = 0x08000000
+	case "idle":
+		c.SysProcAttr.CreationFlags = 0x08000000 | 0x00000040
+	}
+}
+func applyModelPriority(_ *exec.Cmd, _ string) {}
+
+// The picker runs in a child so closing the app cancels the modal dialog.
 var getProcessMemoryInfo = windows.NewLazySystemDLL("kernel32.dll").NewProc("K32GetProcessMemoryInfo")
 
 func testProcessMemory(pid int) (resident, peak uint64) {

@@ -15,6 +15,8 @@ import (
 	"unicode/utf8"
 )
 
+// Section: Duplicate group presentation and keeper recommendations.
+
 type duplicateMember struct {
 	Index int
 	Path  string
@@ -72,6 +74,8 @@ func (s *session) describeDuplicates(plans []record, reason string) duplicateGro
 	return g
 }
 
+// Section: Text evidence for duplicate comparison.
+
 // Text matching supplements byte identity. It compares a bounded sample and
 // never contributes to the decision to recycle a file.
 func duplicateText(path string, st stamp) string {
@@ -86,6 +90,8 @@ func duplicateText(path string, st stamp) string {
 	text := readEvidenceWith(path, false, defaultSettings()).Text
 	return strings.Join(strings.Fields(strings.ToLower(text)), " ")
 }
+
+// Section: Pair selection and identity revalidation.
 
 type duplicateComparison struct {
 	Verdict, Detail, Recommendation string
@@ -130,6 +136,8 @@ func recheckDuplicate(ctx context.Context, root *os.Root, rootPath string, plan 
 	}
 	return after, nil
 }
+
+// Section: Verified pair comparison.
 
 func (a *application) compareDuplicateFiles(ctx context.Context, job string, first, second int) (duplicateComparison, error) {
 	rootPath, left, right, err := a.duplicatePair(job, first, second)
@@ -198,6 +206,8 @@ func (a *application) compareDuplicateFiles(ctx context.Context, job string, fir
 	return duplicateComparison{"Different complete text", "The full texts differ. There is insufficient evidence to establish how they are related.", "Needs your judgment"}, nil
 }
 
+// Section: Text comparison helpers.
+
 // Complete comparison is limited to bounded, valid UTF-8 text files. Document
 // extraction is sampling only, so it cannot establish content equivalence.
 func comparisonText(ctx context.Context, root *os.Root, rootPath string, plan record, before stamp) (string, bool, error) {
@@ -254,6 +264,8 @@ func duplicateTextOverlap(left, right []string) float64 {
 	return float64(shared) / float64(min(len(l), len(r)))
 }
 
+// Section: Recycling approval and receipt contracts.
+
 type duplicateSelection struct {
 	Keep    int
 	Indices []int
@@ -269,6 +281,8 @@ type duplicateRecycleReceipt struct {
 	Groups   []duplicateRecycleOutcome
 	Recycled int
 }
+
+// Section: Approved duplicate recycling.
 
 func (a *application) recycleMatchedCopies(ctx context.Context, job string, revision uint64, keep int, selected []int, recycle func(string) error) (int, error) {
 	receipt, err := a.recycleDuplicateGroups(ctx, job, revision, []duplicateSelection{{Keep: keep, Indices: selected}}, recycle)

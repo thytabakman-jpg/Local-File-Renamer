@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// Section: Completion and review reporting.
+
 type batchReport struct {
 	Job                                         string
 	Phase                                       string
@@ -61,6 +63,8 @@ func (a *application) report(id string) (batchReport, error) {
 	return report, nil
 }
 
+// Section: Review eligibility and revision validation.
+
 var classifications = []string{"article", "academic_book", "book", "course_paper", "presentation", "other"}
 
 func (a *application) liveReview() bool {
@@ -94,6 +98,8 @@ func (s *session) checkEditable(index int) (record, error) {
 	}
 	return plan, nil
 }
+
+// Section: Manual correction and proposal validation.
 
 func (a *application) correct(id string, revision uint64, index int, kind string, name *string) error {
 	a.mu.Lock()
@@ -199,6 +205,8 @@ func (a *application) prepareCorrectionLocked(id string, revision uint64, index 
 	return prior, nil
 }
 
+// Section: Reassessment.
+
 func (a *application) reassess(id string, revision uint64, indexes []int, group, value string, refresh bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -282,6 +290,8 @@ func (a *application) reassess(id string, revision uint64, indexes []int, group,
 	}()
 	return nil
 }
+
+// Section: Approved selection execution.
 
 func (a *application) applySelected(id string, revision uint64, indexes []int, resume bool) error {
 	a.mu.Lock()
@@ -373,6 +383,8 @@ func (s *session) finishSelection() error {
 	return errors.Join(failures...)
 }
 
+// Section: Individual proposal approval.
+
 func (a *application) useReviewName(id string, revision uint64, index int, name string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -385,6 +397,8 @@ func (a *application) useReviewName(id string, revision uint64, index int, name 
 	return a.applySelectionLocked(id, a.v.Revision, []int{index}, nil)
 }
 
+// Section: Undo.
+
 func (a *application) undoJob(id string) error { return a.undoJobRevision(id, nil) }
 func (a *application) undoJobRevision(id string, revision *uint64) error {
 	a.mu.Lock()
@@ -394,6 +408,8 @@ func (a *application) undoJobRevision(id string, revision *uint64) error {
 	}
 	return a.undoLocked()
 }
+
+// Section: Destination override.
 
 func (a *application) changeLocation(id string, revision uint64, index int, destination string) error {
 	a.mu.Lock()

@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+// Section: Flagged record selection and file validation.
+
 const removedFlaggedFile = "Removed from scan"
 
 func flaggedPlan(plan record) bool {
@@ -60,6 +62,8 @@ func checkFlaggedFile(root string, plan record) error {
 	return nil
 }
 
+// Section: Flagged file recycling and recovery.
+
 func (a *application) recycleFlaggedFile(id string, revision uint64, index int) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -101,6 +105,8 @@ func (s *session) finishRecycle() error {
 	}
 	return s.append(record{Type: "recycle-result", Index: r.Index, Path: r.Path, Status: status})
 }
+
+// Section: Model-assisted name recommendations.
 
 var recommendationsSchema = json.RawMessage(`{"type":"object","properties":{"names":{"type":"array","items":{"type":"string"},"maxItems":4}},"required":["names"],"additionalProperties":false}`)
 

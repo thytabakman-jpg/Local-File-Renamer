@@ -1,5 +1,7 @@
 "use strict";
 
+// Section: Shared application state and configuration.
+
 const el = (id) => document.getElementById(id);
 const operationNames = {rename: "File Renamer", move: "Sorter", duplicates: "Duplicate Scanner"};
 const phases = {
@@ -38,6 +40,8 @@ const profileSections = {
   cache:"Cache and reassessment", execution:"Execution permissions"
 };
 const settingsLists = new Set(["include_extensions","exclude_extensions","include_paths","exclude_paths","selected_paths","protected","auto_kinds"]);
+
+// Section: Notifications and inspection rendering.
 
 function notice(message) {
   el("message").textContent = message || "";
@@ -133,6 +137,8 @@ async function loadInspection(key, offset, unknown) {
   }
 }
 
+// Section: Completion reporting and history comparison.
+
 async function loadReceipt(key) {
   try {
     const response = await fetch("/api/report?" + new URLSearchParams({job:latest.Job}), {cache:"no-store",signal:AbortSignal.timeout(5000)});
@@ -185,6 +191,8 @@ async function compareScans(offset) {
 el("compare").onclick=()=>compareScans(0);
 el("compare-more").onclick=()=>compareScans(compareOffset);
 
+// Section: Correction and reassessment controls.
+
 function openCorrection(row, id, revision, applyName = false) {
   correction = {id, revision, index:row.Index, applyName};
   show("correct-kind-label", !applyName);
@@ -211,6 +219,8 @@ el("reassess-group").onclick = () => {
   const value = window.prompt("Value to match, such as .pdf, article, or Insufficient evidence");
   if (value?.trim()) action("reassess", {id:latest.Job, revision:latest.Revision, group, value:value.trim(), refresh:el("fresh-assessment").checked});
 };
+
+// Section: Profile settings rendering and persistence.
 
 function populateSettings(data, profile) {
   const nodes = [];
@@ -299,6 +309,8 @@ el("save-profile").onclick = async () => {
 };
 
 
+// Section: Timing and diagnostics.
+
 function duration(ms) {
   if (ms < 1000) return ms + " ms";
   if (ms < 60000) return (ms / 1000).toFixed(1) + " s";
@@ -332,6 +344,8 @@ async function loadDiagnostics(key, job) {
     if (inspectionKey === key && !closed) el("diagnostic-summary").textContent = err.message;
   }
 }
+
+// Section: Shared review and action utilities.
 
 function canReview(state) {
   return !state.Pending && ["preview", "paused", "files", "folders"].includes(state.Phase);
@@ -367,6 +381,8 @@ async function action(name, fields = {}) {
     await refresh();
   }
 }
+
+// Section: Scan state and inventory rendering.
 
 function folderKey(path) {
   path = path.trim();
@@ -566,6 +582,8 @@ function render(s) {
   if (typeof renderConsole === "function") renderConsole(s);
 }
 
+// Section: State polling.
+
 async function refresh() {
   if (closed) return;
   const serial = ++refreshSerial;
@@ -588,6 +606,8 @@ async function refresh() {
     }
   }
 }
+
+// Section: Folder selection and scan configuration.
 
 el("pick").onclick = async () => {
   el("pick").disabled = true;
@@ -647,6 +667,8 @@ el("scope-mode").onchange = refreshFileTypeSelection;
 el("file-type-options").addEventListener("change",refreshFileTypeSelection);
 el("custom-extensions").addEventListener("input",refreshFileTypeSelection);
 
+// Section: Scan launch and lifecycle controls.
+
 async function submitScan(fresh) {
   if (pendingAction || pendingScan) return;
   const requestID = crypto.randomUUID();
@@ -684,6 +706,8 @@ el("model").onclick = () => action(latest.Phase === "download" ? "pause" : "mode
 el("undo").onclick = () => {
   if (latest.Phase === "undo-paused" || window.confirm("Undo applied file moves, renames, and metadata repairs for this run?")) action("undo");
 };
+// Section: Batch approval and application.
+
 async function applyAllProposals(filter, folder, description) {
   const {Job, Revision} = latest;
   if (!Job || latest.PreviewOnly) return;
@@ -713,6 +737,8 @@ el("apply").onclick = async () => {
     }
   }
 };
+// Section: Pagination, history and application controls.
+
 el("previous-page").onclick = () => {pageOffset=Math.max(0,pageOffset-100);updateReview(latest);};
 el("next-page").onclick = () => {if (pageOffset+100<reviewTotal) {pageOffset+=100;updateReview(latest);}};
 el("inspection-panel").ontoggle = () => render(latest);

@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+// Section: Experiment plan, variant and result contracts.
+
 type testPlan struct {
 	Success    string            `json:"success,omitempty"`
 	Name       string            `json:"name"`
@@ -76,6 +78,8 @@ type savedTest struct {
 	InputHash  string         `json:"input_sha256,omitempty"`
 }
 
+// Section: Plan identity and path validation.
+
 var testIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,100}$`)
 
 func cleanTestPath(value string, folder bool) (string, error) {
@@ -89,6 +93,8 @@ func cleanTestPath(value string, folder bool) (string, error) {
 	}
 	return filepath.ToSlash(path), nil
 }
+
+// Section: Experiment admission and settings validation.
 
 func (a *application) validateTestPlan(plan testPlan, baseline scanSettings) (testPlan, []scanSettings, error) {
 	plan.Name = strings.TrimSpace(plan.Name)
@@ -239,6 +245,8 @@ func (a *application) validateTestPlan(plan testPlan, baseline scanSettings) (te
 	return plan, settings, nil
 }
 
+// Section: Experiment persistence.
+
 func (a *application) saveTestPlan(plan testPlan) (savedTest, error) {
 	a.mu.Lock()
 	baseline, closing := a.activeSettings(), a.v.Closing
@@ -292,6 +300,8 @@ func (a *application) readTest(id string) (savedTest, error) {
 	}
 	return job, nil
 }
+
+// Section: Experiment status and execution initiation.
 
 func (a *application) testStatus(id string) (testReceipt, error) {
 	a.testMu.Lock()

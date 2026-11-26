@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+// Section: Session, inventory and journal data model.
+
 type entry struct {
 	Path         string
 	Folder, Skip bool
@@ -127,6 +129,8 @@ type session struct {
 	batchRecycled                                                           map[string]map[int]bool
 	recycleErrors                                                           map[int]bool
 }
+
+// Section: Inventory enumeration and scope.
 
 func inventory(ctx context.Context, root string) ([]entry, error) {
 	return inventoryScope(ctx, root, defaultSettings().Scope)
@@ -248,6 +252,8 @@ func scanInventory(ctx context.Context, root string, scope scanScope) ([]entry, 
 	})
 	return append(files, dirs...), counts, err
 }
+
+// Section: Session creation, restoration and closure.
 
 func createSession(ctx context.Context, home, root string, m manifest) (*session, error) {
 	return createNamedSession(ctx, home, root, m, "")
@@ -378,6 +384,8 @@ func (s *session) close() {
 		_ = s.log.Close()
 	}
 }
+// Section: Record validation, replay and indexes.
+
 func (s *session) validateRecord(r record) error {
 	switch r.Type {
 	case "plan":
@@ -708,6 +716,8 @@ func (s *session) reindexPlans() {
 	}
 }
 
+// Section: Durable record append.
+
 func (s *session) append(r record) error {
 	r.At = time.Now()
 
@@ -724,6 +734,8 @@ func (s *session) append(r record) error {
 	s.accept(r)
 	return nil
 }
+
+// Section: Filesystem identity and root validation.
 
 func fingerprint(path string) (stamp, error) {
 	info, err := os.Lstat(path)
@@ -782,6 +794,8 @@ func validateRoot(root string) error {
 	}
 	return nil
 }
+
+// Section: Rename transaction execution.
 
 func (s *session) result(index int, path, status, note string) error {
 	return s.append(record{Type: "result", Index: index, Path: path, Status: status, Note: note})
@@ -845,6 +859,8 @@ func (s *session) validateMoveParents(m move) error {
 	return nil
 }
 
+// Section: Review state and pending work.
+
 func (s *session) reviewEnd() int {
 	if len(s.plans) == len(s.manifest.Items) {
 		return len(s.plans)
@@ -907,6 +923,8 @@ func (s *session) flagRows() []record {
 	return flags
 }
 
+// Section: Pending operations and collision checks.
+
 func (s *session) availableForPlan(from, to string) error {
 	if s.proposedTargets[strings.ToLower(to)] {
 		return fmt.Errorf("Proposed name conflict: %s", filepath.Base(to))
@@ -968,6 +986,8 @@ func actualSpelling(path string) bool {
 	}
 	return false
 }
+
+// Section: Interrupted transaction recovery and undo.
 
 func (s *session) finishPending() error {
 	if s.pending == nil {

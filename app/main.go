@@ -19,8 +19,12 @@ import (
 	"time"
 )
 
+// Section: Embedded interface assets.
+
 //go:embed ui/*
 var assets embed.FS
+
+// Section: Application startup and command modes.
 
 func main() {
 	if len(os.Args) == 3 && os.Args[1] == "--choose-folder" {
@@ -94,6 +98,8 @@ func main() {
 	}
 }
 
+// Section: HTTP server and route registration.
+
 func server(a *application) *http.Server {
 	nonce := token()
 	aFS, _ := fs.Sub(assets, "ui")
@@ -126,6 +132,8 @@ func server(a *application) *http.Server {
 		}
 		return true
 	}
+	// Section: Review batch preflight.
+
 	mux.HandleFunc("GET /api/apply-all", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -146,6 +154,8 @@ func server(a *application) *http.Server {
 		reply(w, map[string]int{"count": len(indices)})
 	})
 	a.registerTestRoutes(mux, auth)
+	// Section: Chat endpoints.
+
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -188,6 +198,8 @@ func server(a *application) *http.Server {
 		}
 		reply(w, response)
 	})
+	// Section: File review endpoints.
+
 	mux.HandleFunc("GET /api/file-preview", func(w http.ResponseWriter, r *http.Request) {
 		if auth(w, r) {
 			a.serveFilePreview(w, r)
@@ -211,6 +223,8 @@ func server(a *application) *http.Server {
 		}
 		reply(w, names)
 	})
+	// Section: Desktop connector and operational diagnostics.
+
 	mux.HandleFunc("POST /api/bridge", a.bridge)
 	mux.HandleFunc("GET /api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
@@ -262,6 +276,8 @@ func server(a *application) *http.Server {
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(data)
 	})
+	// Section: Settings and naming rules.
+
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -278,6 +294,8 @@ func server(a *application) *http.Server {
 			reply(w, a.getRules())
 		}
 	})
+	// Section: Run history and completion reports.
+
 	mux.HandleFunc("GET /api/compare", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -302,6 +320,8 @@ func server(a *application) *http.Server {
 		}
 		reply(w, report)
 	})
+	// Section: Scan state, inspection and exports.
+
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		if auth(w, r) {
 			reply(w, a.snapshot())
@@ -357,6 +377,8 @@ func server(a *application) *http.Server {
 		}
 	})
 	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 45 * time.Second, MaxHeaderBytes: 16 << 10}
+	// Section: Operation-specific review endpoints.
+
 	mux.HandleFunc("GET /api/compare-duplicates", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -386,6 +408,8 @@ func server(a *application) *http.Server {
 		}
 		reply(w, results)
 	})
+	// Section: Mutating application command dispatch.
+
 	mux.HandleFunc("POST /api/action", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
@@ -620,10 +644,14 @@ func server(a *application) *http.Server {
 	})
 	return srv
 }
+// Section: HTTP response utility.
+
 func reply(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// Section: Host operating system interactions.
 
 func openURL(path string) error {
 	var c *exec.Cmd

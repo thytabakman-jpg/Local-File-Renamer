@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+// Section: Inspection result and model error contracts.
+
 type inspection struct {
 	Text, Metadata, Image                      bool
 	AI, Detail, Model                          string
@@ -42,6 +44,8 @@ func localAIIssue(err error) (status, note string) {
 	}
 	return modelUnavailable, "Local model could not assess this file: " + err.Error()
 }
+
+// Section: Proposal construction and journal admission.
 
 func recordSuggestion(s *session, i int, d decision, st stamp) error {
 	if st.ID != "" && photoExtension(s.manifest.Items[i].Path) {
@@ -123,6 +127,8 @@ func buildSuggestion(s *session, i int, d decision, st stamp, revision bool) rec
 		Rough: auto && photoExtension(item.Path) && imageSubject(baseName(filepath.Base(item.Path))) == ""}
 }
 
+// Section: Assessment interface and inspection dispatch.
+
 type assessFile func(context.Context, string, evidence) (assessment, error)
 
 func suggest(ctx context.Context, s *session, m *localModel, i int) (decision, stamp, error) {
@@ -143,6 +149,8 @@ func inspect(ctx context.Context, s *session, assess assessFile, transcribe tran
 func inspectFile(ctx context.Context, s *session, assess assessFile, transcribe transcribePage, i int, override string, refresh bool, opts scanSettings) (result decision, original stamp, failure error) {
 	return inspectPrepared(ctx, s, assess, transcribe, i, override, refresh, opts, nil)
 }
+
+// Section: Evidence preparation and PDF enrichment.
 
 type preparedEvidence struct {
 	Evidence evidence
@@ -194,6 +202,8 @@ func addPDFEvidence(ctx context.Context, path string, opts scanSettings, pre *pr
 	}
 	return true
 }
+
+// Section: File inspection and decision pipeline.
 
 func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcribe transcribePage, i int, override string, refresh bool, opts scanSettings, pre *preparedEvidence) (result decision, original stamp, failure error) {
 	started := time.Now()
@@ -442,6 +452,8 @@ func unresolvedPDF(s *session, opts scanSettings, path, name, override string, e
 	return d.Unknown || d.Note != "" || d.Name == name && d.Outcome != "Name verified"
 }
 
+// Section: Folder assessment.
+
 func folderDecision(ctx context.Context, path string, assess assessFile, s *session) decision {
 	name := filepath.Base(path)
 	if meaningful(name) {
@@ -491,6 +503,8 @@ func folderDecision(ctx context.Context, path string, assess assessFile, s *sess
 	}
 	return decision{Name: makeName([]string{a.Label}, ""), Inspection: inspection{AI: "Used", ModelMS: elapsedMS(start)}}
 }
+
+// Section: Current-path resolution and evidence prefetch.
 
 func (s *session) currentPath(path string, index int) string {
 	active := len(s.moves) - s.undoCount

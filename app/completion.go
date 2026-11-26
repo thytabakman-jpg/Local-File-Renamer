@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+// Section: Completion receipt and outcome summaries.
+
 type completionCount struct {
 	Completed, Pending, Skipped, Failed int
 }
@@ -70,6 +72,63 @@ func (s *session) receipt() completionReceipt {
 	return r
 }
 
+// Section: Receipt and run outcome helpers.
+
+func (s *session) metadataApproved(index int) bool {
+	for _, plan := range s.metadataPlans {
+		if plan.Index == index {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *session) availableTypes() []string {
+	if s.manifest.Inventory != nil {
+		return s.manifest.Inventory.FileTypes
+	}
+	return nil
+}
+
+func (s *session) zeroChangeReason(busy bool, pending int) string {
+	count := s.fileCount
+	if s.manifest.Inventory != nil {
+		count = s.manifest.Inventory.Included
+	}
+	switch {
+	case count == 0:
+		if s.manifest.Inventory != nil && s.manifest.Inventory.Found == 0 {
+			return "No files were found inside the selected scope"
+		}
+		return "No files matched the saved filter"
+	case s.renamed > 0 || len(s.repaired) > 0:
+		return ""
+	}
+	receipt := s.receipt()
+	switch {
+	case receipt.Renames.Failed > 0:
+		return "One or more file writes failed"
+	case len(s.plans) < s.fileCount && busy:
+		return "File assessment is in progress"
+	case len(s.plans) < s.fileCount:
+		return "Assessment paused or failed before all files were checked"
+	case s.manifest.Operation == scanDuplicates:
+		return "Duplicate Scanner leaves files unchanged"
+	case pending > 0 && s.manifest.Auto:
+		return "Pending proposals did not qualify for automatic apply"
+	case pending > 0:
+		return "Proposals await approval"
+	case receipt.Assessments.Failed > 0:
+		return "Assessment failed and produced no proposals"
+	case s.manifest.Operation == scanMove:
+		return "No eligible destination was found for the assessed files"
+	default:
+		return "Assessment produced no proposals"
+	}
+}
+
+// Section: Context-aware content hashing.
+
 type contextReader struct {
 	ctx context.Context
 	r   io.Reader
@@ -101,6 +160,8 @@ func comparisonHash(ctx context.Context, path string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// Section: Historical run comparison.
 
 type runDelta struct {
 	Path                                                                                                                       string
@@ -188,57 +249,4 @@ func (a *application) compareRuns(first, second string, offset int, showNames bo
 		result.NextOffset = offset + len(result.Rows)
 	}
 	return result, nil
-}
-
-func (s *session) metadataApproved(index int) bool {
-	for _, plan := range s.metadataPlans {
-		if plan.Index == index {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *session) availableTypes() []string {
-	if s.manifest.Inventory != nil {
-		return s.manifest.Inventory.FileTypes
-	}
-	return nil
-}
-
-func (s *session) zeroChangeReason(busy bool, pending int) string {
-	count := s.fileCount
-	if s.manifest.Inventory != nil {
-		count = s.manifest.Inventory.Included
-	}
-	switch {
-	case count == 0:
-		if s.manifest.Inventory != nil && s.manifest.Inventory.Found == 0 {
-			return "No files were found inside the selected scope"
-		}
-		return "No files matched the saved filter"
-	case s.renamed > 0 || len(s.repaired) > 0:
-		return ""
-	}
-	receipt := s.receipt()
-	switch {
-	case receipt.Renames.Failed > 0:
-		return "One or more file writes failed"
-	case len(s.plans) < s.fileCount && busy:
-		return "File assessment is in progress"
-	case len(s.plans) < s.fileCount:
-		return "Assessment paused or failed before all files were checked"
-	case s.manifest.Operation == scanDuplicates:
-		return "Duplicate Scanner leaves files unchanged"
-	case pending > 0 && s.manifest.Auto:
-		return "Pending proposals did not qualify for automatic apply"
-	case pending > 0:
-		return "Proposals await approval"
-	case receipt.Assessments.Failed > 0:
-		return "Assessment failed and produced no proposals"
-	case s.manifest.Operation == scanMove:
-		return "No eligible destination was found for the assessed files"
-	default:
-		return "Assessment produced no proposals"
-	}
 }

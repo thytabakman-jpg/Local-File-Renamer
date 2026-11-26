@@ -10,6 +10,8 @@ import (
 	"unicode/utf16"
 )
 
+// Section: Naming configuration and defaults.
+
 type namingRules struct {
 	NormalizeSpacing    bool              `json:"normalize_spacing"`
 	ReplaceUnderscores  bool              `json:"replace_underscores"`
@@ -41,6 +43,8 @@ var namingFormats = map[string]string{
 var spacedDash = regexp.MustCompile(`(?:\s+-\s*|\s*-\s+)`)
 var spellingWord = regexp.MustCompile(`^[\pL\pM]+$`)
 
+// Section: Rule validation.
+
 func validateRules(r namingRules) error {
 	if len(r.Protected) > 100 {
 		return errors.New("Use at most 100 protected terms")
@@ -60,6 +64,8 @@ func validateRules(r namingRules) error {
 	}
 	return nil
 }
+
+// Section: Name normalization and protection.
 
 var codeWithUnderscore = regexp.MustCompile(`\b[A-Z]{2,12}_\d{2,}[A-Z]?\b`)
 var alternateSeparator = strings.NewReplacer(" – ", " - ", " _ ", " - ")
@@ -171,6 +177,8 @@ func (r namingRules) cleanName(name string, folder bool) string {
 	return stem + ext
 }
 
+// Section: Windows name validation.
+
 func windowsNameLength(name string) int { return len(utf16.Encode([]rune(name))) }
 
 func validProposedName(name, original string, folder bool) bool {
@@ -179,6 +187,8 @@ func validProposedName(name, original string, folder bool) bool {
 		!reserved.MatchString(name) && windowsNameLength(name) <= 255 &&
 		(folder || extension(name) == extension(original))
 }
+
+// Section: Atomic settings persistence utility.
 
 func atomicJSON(path string, value any) error {
 	data, err := json.Marshal(value)
@@ -196,6 +206,8 @@ func atomicJSON(path string, value any) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+
+// Section: Application naming settings access and updates.
 
 func (a *application) getRules() ruleSet {
 	a.mu.Lock()

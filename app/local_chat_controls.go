@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+// Section: Immediate command recognition.
+
 var proposalExplanation = regexp.MustCompile(`(?i)^(?:explain|show why for) (?:proposal|file) (\d+)[.?!]?$`)
 var folderPickerRequest = regexp.MustCompile(`(?i)^(?:open|show) (?:the )?folder picker(?: (?:at|in) (.+))?[.?!]?$`)
 var explicitDefaultsRequest = regexp.MustCompile(`(?i)\b(?:default to|always scan|(?:make|save|set|use|change|remember|keep)\b.{0,120}\b(?:defaults?|future scans|every new scan|from now on))\b`)
@@ -105,6 +107,8 @@ func extendedImmediateChatPlan(message string) (chatPlan, bool) {
 	}
 	return chatPlan{}, false
 }
+
+// Section: Scan configuration and defaults.
 
 func (p chatPlan) scanSetup() (scanStartOptions, error) {
 	setup := scanStartOptions{ScopeMode: p.ScopeMode, Fresh: p.Fresh, FallbackAI: !p.UseImageScanner}
@@ -218,6 +222,8 @@ func applyChatScope(opts *scanSettings, plan chatPlan, setup scanStartOptions) e
 	return nil
 }
 
+// Section: Settings patching.
+
 type chatSettingChange struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
@@ -265,6 +271,8 @@ func applyChatSettings(opts *scanSettings, changes []chatSettingChange) error {
 	*opts = updated
 	return nil
 }
+
+// Section: Run selection and comparison.
 
 func chatRun(jobs []job, ref, folder string) (job, error) {
 	ref, folder = strings.TrimSpace(ref), strings.TrimSpace(folder)
@@ -342,6 +350,8 @@ func (a *application) compareChatRuns(left, right job) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
+// Section: Proposal retrieval and reassessment.
+
 func (a *application) chatProposal(v view, plan chatPlan) (proposalRow, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -396,6 +406,8 @@ func (a *application) chatReassess(v view, plan chatPlan) error {
 	}
 	return a.reassess(v.Job, v.Revision, indices, "", "", true)
 }
+
+// Section: Results and scan progress.
 
 func (a *application) chatResults(v view, exact bool) (chatReply, error) {
 	if v.Operation != scanMove && v.Operation != scanDuplicates {
@@ -473,6 +485,8 @@ func (a *application) chatScanUpdate(id string, exact, results bool) (chatReply,
 	return response, nil
 }
 
+// Section: Folder selection and run history.
+
 func chatPickerStart(requested, selected, saved string) string {
 	if filepath.IsAbs(requested) {
 		return requested
@@ -505,6 +519,8 @@ func chatHistory(jobs []job) string {
 	return strings.Join(lines, "\n")
 }
 
+// Section: Diagnostics.
+
 func (a *application) chatDiagnostics(v view) (chatReply, error) {
 	if v.StartError != "" {
 		return chatReply{Message: "The latest scan could not start. " + v.StartError}, nil
@@ -532,6 +548,8 @@ func (a *application) chatDiagnostics(v view) (chatReply, error) {
 		float64(d.ReadMS)/1000, float64(d.StartupMS)/1000, float64(d.ModelMS)/1000))
 	return chatReply{Message: strings.Join(lines, "\n")}, nil
 }
+
+// Section: Proposal editing.
 
 func (a *application) editChatProposal(v view, plan chatPlan) (chatReply, error) {
 	row, err := a.chatProposal(v, plan)
@@ -563,6 +581,8 @@ func (a *application) editChatProposal(v view, plan chatPlan) (chatReply, error)
 	}
 	return chatReply{}, errors.New("Choose how to edit the proposal")
 }
+
+// Section: Scan launch and failure recovery.
 
 func (a *application) startChatScan(v view, plan chatPlan, selected string) (chatReply, error) {
 	folder := strings.TrimSpace(selected)

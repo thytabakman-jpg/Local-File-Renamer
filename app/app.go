@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+// Section: Application state and presentation contracts.
+
 type flagRow struct{ Path, Status, Reason string }
 type job struct {
 	ID, Root, Date string
@@ -91,6 +93,8 @@ type application struct {
 	pause                   bool
 }
 
+// Section: Application initialization.
+
 func dataHome() (string, error) {
 	if home := os.Getenv("LOCAL_RENAMER_HOME"); home != "" {
 		return filepath.Abs(home)
@@ -136,6 +140,8 @@ func newApp(home, backend, modelDir string) (*application, error) {
 	}
 	return a, nil
 }
+
+// Section: Saved jobs and session projections.
 
 func (a *application) scanJobs() {
 	var jobs []job
@@ -307,6 +313,8 @@ func (a *application) loadSession(s *session) {
 	a.syncSession(true)
 }
 
+// Section: Scan admission and launch.
+
 func within(parent, path string) bool {
 	r, err := filepath.Rel(parent, path)
 	return err == nil && (r == "." || (r != ".." && !strings.HasPrefix(r, ".."+string(os.PathSeparator))))
@@ -457,6 +465,8 @@ func (a *application) startLocked(p string, partial bool, opts scanSettings, ope
 	}()
 	return nil
 }
+// Section: Scan resume and pause.
+
 func (a *application) resume(id string, partial bool) error {
 	return a.resumeWithFallback(id, partial, false)
 }
@@ -494,6 +504,24 @@ func (a *application) resumeLocked(id string, partial, fallback bool) error {
 	go a.run(ctx, s, partial)
 	return nil
 }
+func (a *application) pauseRun() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pauseLocked()
+}
+
+func (a *application) pauseLocked() {
+	if a.v.Busy {
+		a.pause = true
+		a.v.Pausing = true
+		if a.cancel != nil {
+			a.cancel()
+		}
+	}
+}
+
+// Section: Execution lifecycle and scan worker.
+
 func (a *application) begin(phase string) context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
@@ -664,6 +692,8 @@ func (a *application) run(ctx context.Context, s *session, partial bool) {
 	a.finish(failure)
 }
 
+// Section: Proposal retrieval.
+
 func (a *application) previewPage(offset int) ([]proposalRow, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -734,6 +764,8 @@ func (a *application) previewPageLocked(offset int) ([]proposalRow, error) {
 	}
 	return rows, nil
 }
+
+// Section: Apply and undo operations.
 
 func (a *application) apply(id string, start, end int, excluded []int) error {
 	a.mu.Lock()
@@ -815,21 +847,40 @@ func (a *application) applyOneRevision(id string, index int, revision *uint64) e
 	return a.applySelectionLocked(id, *revision, []int{index}, nil)
 }
 
-func (a *application) pauseRun() {
+func (a *application) undo() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.pauseLocked()
+	return a.undoLocked()
 }
 
-func (a *application) pauseLocked() {
-	if a.v.Busy {
-		a.pause = true
-		a.v.Pausing = true
-		if a.cancel != nil {
-			a.cancel()
-		}
+func (a *application) undoLocked() error {
+	if a.v.Busy || a.v.Closing || a.s == nil || a.v.UndoLeft == 0 && !a.v.Pending {
+		return errors.New("There are no changes to undo")
 	}
+	s := a.s
+	if len(s.selection) > 0 {
+		return errors.New("Resume applying the approved selection before undoing changes")
+	}
+	a.begin("undo")
+	go func() {
+		err := validateRoot(s.manifest.Root)
+		a.mu.Lock()
+		if err == nil && s.pending != nil {
+			err = s.finishPending()
+		}
+		for err == nil && (len(s.moves) > s.undoCount || len(s.repaired) > s.metadataUndone) && !a.pause {
+			err = s.undoNext()
+			a.syncSession(false)
+			a.mu.Unlock()
+			a.mu.Lock()
+		}
+		a.mu.Unlock()
+		a.finish(err)
+	}()
+	return nil
 }
+
+// Section: External application controls.
 
 func (a *application) pick(ctx context.Context, folder string) (string, error) {
 	a.mu.Lock()
@@ -886,38 +937,7 @@ func (a *application) download() error {
 	}()
 	return nil
 }
-func (a *application) undo() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.undoLocked()
-}
-
-func (a *application) undoLocked() error {
-	if a.v.Busy || a.v.Closing || a.s == nil || a.v.UndoLeft == 0 && !a.v.Pending {
-		return errors.New("There are no changes to undo")
-	}
-	s := a.s
-	if len(s.selection) > 0 {
-		return errors.New("Resume applying the approved selection before undoing changes")
-	}
-	a.begin("undo")
-	go func() {
-		err := validateRoot(s.manifest.Root)
-		a.mu.Lock()
-		if err == nil && s.pending != nil {
-			err = s.finishPending()
-		}
-		for err == nil && (len(s.moves) > s.undoCount || len(s.repaired) > s.metadataUndone) && !a.pause {
-			err = s.undoNext()
-			a.syncSession(false)
-			a.mu.Unlock()
-			a.mu.Lock()
-		}
-		a.mu.Unlock()
-		a.finish(err)
-	}()
-	return nil
-}
+// Section: Inspection views and CSV export.
 
 func (a *application) inspections(offset int, unknown bool) (inspectionPage, error) {
 	a.mu.Lock()
