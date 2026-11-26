@@ -108,6 +108,58 @@ For a controlled comparison, enable **Record file hashes for a controlled compar
 
 The connection can start and pause scans, read proposed changes and reports, manage profiles and rules, correct classifications or filenames, reassess selections, apply authorised selections, and undo an identified run. For example, a single `renamer_start` call with a folder, `scope_mode: "selected"`, `include_extensions: [".pdf"]`, and `changes: {"execution.mode": "review"}` starts a PDF-only run without altering the active profile. Use the returned job ID with `renamer_status`. Use `renamer_get_settings` with specific field names for compact reads and `renamer_patch_settings` to save or reset an existing profile. The app and connection share validation, conflict checks, and the undo journal. The app can scan and apply changes independently.
 
+## Architecture and development guide
+
+Use this map before changing functionality. Locate the operational owner first; keep interface adapters small and do not duplicate domain rules merely to expose another command. The Go files in `app/` share a package, so these ownership boundaries are conventions, not compiler-enforced package isolation.
+
+| Responsibility | Authoritative implementation locations |
+| --- | --- |
+| Application lifecycle, scan orchestration and shared view | `app.go` |
+| Scan configuration, scope, inventory and start/resume | `scan_setup.go`, `scan_operations.go` |
+| Evidence collection, OCR, model assessment and final decision | `worker.go`, `extract.go`, `ocr*.go`, `media*.go`, `scan_model.go`, `model.go`, `cache.go`, `online.go` |
+| Classification, filename rules and document-specific naming | `classification.go`, `naming.go`, `rules.go`, `title_style.go`, `article_front_matter.go`, `image_names.go`, `versions.go` |
+| Apply rename selections, revision checks and locking | `apply_all.go`; correction/reassessment and undo entry points in `control.go` |
+| Move assessment, destination validation and execution planning | `move_assessment.go`, `move_batch.go`, `sorting.go` |
+| Duplicate assessment, equivalence and recycling approvals | `scan_operations.go`, `duplicate_equivalence.go`, `duplicate_review.go`, `duplicate_batch.go` |
+| Journal validation, durable state transitions, conflict checks and recovery | `journal.go`, `metadata_journal.go`, `integrity.go`; metadata evidence/repair in `metadata.go` |
+| Review queries and previews; diagnostics, export and completion | `review_preview.go`, `flagged_review.go`, `diagnostics.go`, `completion.go` |
+| Profiles, resource settings and permissions | `settings.go`, `rules.go` |
+| Browser HTTP interface and presentation | `main.go`, `ui/` |
+| ChatGPT Work/MCP interface | `bridge.go`, `bridge_results.go`; stable launcher in `../launcher/`, `../internal/mcplaunch/` |
+| Local chat | `local_chat.go`, `local_chat_controls.go` |
+| Controlled experiments and reports | `test_plan.go`, `test_runner.go`, `test_report.go`, `test_chat.go` |
+| Platform-specific implementation and Windows distribution | `platform_*.go`, `ocr_*.go`, `../installer/`, `../build-windows.sh` |
+
+Paths in the table are relative to `app/` unless stated otherwise. Keep authorization specific to each interface, but route accepted requests through the same domain methods. Never bypass revision checks, lock ownership, root and fingerprint validation, the journal, explicit duplicate approval, or preview-only permissions. Preserve journal formats, command names, response shapes and saved-run compatibility when refactoring. Avoid changing naming policy, error recovery or filesystem effects in a purely structural commit. Prefer existing files and small coherent functions; add an abstraction only when it eliminates a demonstrated ownership or dependency problem.
+
+### Verification before distribution
+
+Run from the repository root with the Go version pinned in `go.mod` and required modules available. On Linux (or a compatible Linux development environment), execute:
+
+```sh
+go version
+go build ./app
+go vet ./...
+go test -count=1 ./...
+go test -race -count=1 ./app
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/LocalFileRenamer.exe ./app
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/LocalFileRenamer-MCP.exe ./launcher
+```
+
+Run the race detector with a supported Go/CGO toolchain. The full Windows installer requires the separate packaging command in Build. A cross-build is not a native Windows runtime test. Record failures and skipped tests; in particular, a skipped real-model test does not establish inference compatibility.
+
+Safety regression coverage includes `TestRecoveryAfterRenameBeforeResult`, `TestApplyPausedPreviewReopenAndResume`, `TestReadySelectionDuringScanAndRecovery`, `TestSingleRenameCanRetryAfterDestinationConflict`, `TestUndoEarlyMetadataAfterLaterFolderRename`, `TestSortBoundedPreviewAndUndo`, `TestFileMoverReviewsAndAppliesInsideSelectedFolder`, `TestDuplicateCheckStaysReadOnlyAndSavesResults`, `TestDuplicateBatchPreflightsEveryGroupAndRecordsPartialResults`, `Test36ApplyAllAcrossReviewPagesAndRejectStaleCount`, and `Test36ApplyChosenNamesValidatesEveryFileBeforeEditing`. These are existing tests, not a statement that the current commit has passed them.
+
+Before using a new Windows executable on real files, exercise a disposable folder: preview without changes, reject stale approvals and collisions, apply selected renames/moves, pause and resume a run, close and reopen, undo, and verify file contents against starting hashes. Test duplicate recycling only on disposable duplicates, including keeper preservation and native Windows Recycle Bin behaviour. Check the MCP connection, its authorization and the installed launcher against the live app. Treat failed or unexecuted gates as outstanding.
+
+### Runtime performance measurement
+
+Use the existing Local tests and Compare scans features rather than infer execution speed from source size. Compare the pre-refactor source snapshot (`22f6c73d58c3b4925bbd821d79f274f8669d57e3`) with the candidate using identical relative paths and content hashes, model/engine versions, scan settings, hardware, worker counts and online/OCR policies. For cross-version results, retain separate reports from each executable; a historical Rename baseline with comparison hashes can verify input identity but does not contain full historical memory measurements.
+
+Run a no-AI Rename preview, AI-assisted Rename preview, Move preview and Duplicate Check on representative disposable inputs. Measure cold and warm cache runs separately, repeat each condition at least three times, and compare median elapsed time, files per second, peak app/model memory, correctness, deferrals and errors. Measure application/MCP connection startup and first model request separately. Use diagnostic timing to distinguish evidence reads, OCR, model startup/inference, online lookups, and apply operations. For cross-version comparisons, avoid using real user files for apply or recycling tests.
+
+Current implementation permits concurrent evidence preparation but serializes model inference. Model startup/restarts, OCR, extraction, hashing and online requests are plausible costs, not measured bottlenecks. Optimize the largest measured cost only after output equivalence and safety gates pass. Keep a record of the commit, environment, corpus hash, settings, raw reports and any exclusions.
+
 ## Build
 
 The MIT-licensed source includes `build-windows.sh`. It requires Go 1.27.4, Python 3, a POSIX shell, and the pinned [llama.cpp b12588](https://github.com/ggml-org/llama.cpp/releases/tag/b12588) CPU archive. Set `LLAMA_CPU_ZIP` to reuse a verified copy of the archive. Setup can offer Microsoft's signed Visual C++ runtime if it is missing.
