@@ -422,6 +422,33 @@ func (a *application) registerScanResultRoutes(mux *http.ServeMux, auth func(htt
 	})
 }
 
+type httpActionRequest struct {
+	Action, Root, ID                     string
+	Operation                            scanOperation
+	Partial, Folders, Auto, Repair, Sort bool
+	Start, End, Index                    int
+	Enabled                              bool
+	Excluded, Indices                    []int
+	IncludeExtensions                    []string
+	ScopeMode, RequestID                 string
+	Subfolders                           *bool
+	Fresh                                bool
+	Revision                             *uint64
+	Keep                                 *int
+	DuplicateGroups, VerifiedGroups      []duplicateSelection
+	ChosenNames                          []chosenName
+	Count                                int
+	RowRevisions                         map[int]uint64
+	Rules                                *namingRules
+	Filename                             *string
+	Classification, Group, Value         string
+	Refresh                              bool
+	Profile                              string
+	Settings                             *scanSettings
+	Activate, PreviewOnly                bool
+	MediaSamples                         *bool
+}
+
 func (a *application) registerActionRoute(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool, srv *http.Server) {
 	mux.HandleFunc("POST /api/action", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
@@ -432,216 +459,187 @@ func (a *application) registerActionRoute(mux *http.ServeMux, auth func(http.Res
 			return
 		}
 		body := http.MaxBytesReader(w, r.Body, 2<<20)
-		var q struct {
-			Action, Root, ID                     string
-			Operation                            scanOperation
-			Partial, Folders, Auto, Repair, Sort bool
-			Start, End, Index                    int
-			Enabled                              bool
-			Excluded, Indices                    []int
-			IncludeExtensions                    []string
-			ScopeMode, RequestID                 string
-			Subfolders                           *bool
-			Fresh                                bool
-			Revision                             *uint64
-			Keep                                 *int
-			DuplicateGroups, VerifiedGroups      []duplicateSelection
-			ChosenNames                          []chosenName
-			Count                                int
-			RowRevisions                         map[int]uint64
-			Rules                                *namingRules
-			Filename                             *string
-			Classification, Group, Value         string
-			Refresh                              bool
-			Profile                              string
-			Settings                             *scanSettings
-			Activate, PreviewOnly                bool
-			MediaSamples                         *bool
-		}
+		var q httpActionRequest
 		if err := json.NewDecoder(body).Decode(&q); err != nil {
 			http.Error(w, "Invalid action", 400)
 			return
 		}
-		var err error
-		switch q.Action {
-		case "pick":
-			var root string
-			root, err = a.pick(r.Context(), q.Root)
-			if err == nil {
-				reply(w, map[string]string{"root": root})
-				return
-			}
-		case "start":
-			if q.Root == "" {
-				err = fmt.Errorf("Pick a folder first")
-			} else {
-				err = a.startConfiguredScan(q.Root, q.Partial, q.Folders, q.Auto, q.Repair, q.Sort, q.IncludeExtensions, q.MediaSamples, q.PreviewOnly, q.Operation, scanStartOptions{
-					ScopeMode: q.ScopeMode, Subfolders: q.Subfolders, Fresh: q.Fresh, RequestID: q.RequestID, FallbackAI: true,
-				})
-			}
-		case "resume":
-			err = a.resumeWithFallback(q.ID, q.Partial, true)
-		case "apply":
-			if q.Revision != nil {
-				a.mu.Lock()
-				if a.v.Revision != *q.Revision {
-					err = fmt.Errorf("The preview changed. Review it again before applying")
-				} else {
-					err = a.applyLocked(q.ID, q.Start, q.End, q.Excluded)
-				}
-				a.mu.Unlock()
-			} else {
-				err = a.apply(q.ID, q.Start, q.End, q.Excluded)
-			}
-		case "apply-selected":
-			if q.Revision == nil {
-				err = fmt.Errorf("Provide the current proposal revision")
-			} else {
-				a.mu.Lock()
-				err = a.applySelectionLocked(q.ID, *q.Revision, q.Indices, q.RowRevisions)
-				a.mu.Unlock()
-			}
-		case "apply-all":
-			if q.Revision == nil {
-				err = fmt.Errorf("Provide the current proposal revision")
-			} else {
-				err = a.applyAllReviewed(q.ID, *q.Revision, q.Group, q.Root, q.Count)
-			}
-		case "apply-chosen-names":
-			err = a.applyChosenNames(q.ID, q.ChosenNames)
-		case "change-location":
-			if q.Revision == nil {
-				err = fmt.Errorf("Provide the current proposal revision")
-			} else {
-				err = a.changeLocation(q.ID, *q.Revision, q.Index, q.Root)
-			}
-		case "correct":
-			if q.Revision == nil {
-				err = fmt.Errorf("Provide the current proposal revision")
-			} else {
-				err = a.correct(q.ID, *q.Revision, q.Index, q.Classification, q.Filename)
-			}
-		case "reassess":
-			if q.Revision == nil {
-				err = fmt.Errorf("Provide the current proposal revision")
-			} else {
-				err = a.reassess(q.ID, *q.Revision, q.Indices, q.Group, q.Value, q.Refresh)
-			}
-		case "save-profile", "restore-profile":
-			if q.Revision == nil || q.Action == "save-profile" && q.Settings == nil {
-				err = fmt.Errorf("Provide the current profile revision and complete settings")
-			} else {
-				err = a.saveProfile(*q.Revision, q.Profile, q.Settings, q.Activate || q.Action == "restore-profile")
-			}
-		case "rules":
-			if q.Revision == nil || q.Rules == nil {
-				err = fmt.Errorf("Provide the current rule revision and complete naming rules")
-			} else {
-				err = a.updateRules(*q.Revision, *q.Rules)
-			}
-		case "open-pdf":
-			path, _, readErr := a.previewFile(q.ID, q.Index)
-			if readErr != nil {
-				err = readErr
-			} else if !strings.EqualFold(extension(path), ".pdf") {
-				err = fmt.Errorf("Choose a PDF to open")
-			} else {
-				err = openURL(path)
-			}
-		case "use-review-name":
-			if q.Revision == nil || q.Filename == nil {
-				err = fmt.Errorf("Provide a filename and the current proposal revision")
-			} else {
-				err = a.useReviewName(q.ID, *q.Revision, q.Index, *q.Filename)
-			}
-		case "apply-one":
-			err = a.applyOneRevision(q.ID, q.Index, q.Revision)
-		case "recycle-duplicates", "recycle-duplicate-groups", "recycle-verified-duplicates", "recycle-all-recommendations":
-			if !recycleAvailable {
-				err = fmt.Errorf("The Windows Recycle Bin is unavailable")
-				break
-			}
-			if q.Revision == nil {
-				err = fmt.Errorf("Confirm copies from the current duplicate scan")
-				break
-			}
-			if q.Action == "recycle-duplicates" {
-				if q.Keep == nil {
-					err = fmt.Errorf("Choose a file to keep")
-					break
-				}
-				count, recycleErr := a.recycleMatchedCopies(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices, recycleFile)
-				if recycleErr != nil {
-					err = fmt.Errorf("%d recycled. %w", count, recycleErr)
-					break
-				}
-				reply(w, map[string]int{"recycled": count})
-				return
-			}
-			var receipt duplicateRecycleReceipt
-			var recycleErr error
-			if q.Action == "recycle-all-recommendations" {
-				receipt, recycleErr = a.recycleAllRecommendations(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.VerifiedGroups, recycleFile)
-			} else {
-				receipt, recycleErr = a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
-			}
-			message := ""
-			if recycleErr != nil {
-				message = recycleErr.Error()
-			}
-			reply(w, struct {
-				duplicateRecycleReceipt
-				Error string
-			}{receipt, message})
-			return
-		case "recycle-file":
-			if q.Revision == nil || len(q.Indices) != 1 {
-				err = fmt.Errorf("Confirm one file from the current review")
-			} else {
-				err = a.recycleFlaggedFile(q.ID, *q.Revision, q.Indices[0])
-			}
-		case "bridge":
-			err = a.setBridge(q.Enabled)
-		case "pause":
-			a.pauseRun()
-		case "undo":
-			err = a.undo()
-		case "model":
-			err = a.download()
-		case "select":
-			err = a.selectJob(q.ID)
-		case "open-data":
-			err = openURL(a.home)
-		case "exit":
-			work, picker := a.requestClose()
-			a.testMu.Lock()
-			testDone := a.testDone
-			a.testMu.Unlock()
-			const accepted = "{\"ok\":true}\n"
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.Header().Set("Content-Length", strconv.Itoa(len(accepted)))
-			_, _ = io.WriteString(w, accepted)
-			_ = http.NewResponseController(w).Flush()
-			go func() {
-				for _, done := range []<-chan struct{}{work, picker, testDone} {
-					if done != nil {
-						<-done
-					}
-				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = srv.Shutdown(ctx)
-			}()
-			return
-		default:
-			err = fmt.Errorf("Unknown action")
-		}
-		if err != nil {
-			http.Error(w, err.Error(), 409)
-			return
-		}
-		reply(w, map[string]bool{"ok": true})
+		a.executeHTTPAction(w, r, srv, q)
 	})
+}
+
+func (a *application) shutdownHTTP(w http.ResponseWriter, srv *http.Server) {
+	work, picker := a.requestClose()
+	a.testMu.Lock()
+	testDone := a.testDone
+	a.testMu.Unlock()
+	const accepted = "{\"ok\":true}\n"
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(accepted)))
+	_, _ = io.WriteString(w, accepted)
+	_ = http.NewResponseController(w).Flush()
+	go func() {
+		for _, done := range []<-chan struct{}{work, picker, testDone} {
+			if done != nil {
+				<-done
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
+}
+
+func (a *application) executeHTTPAction(w http.ResponseWriter, r *http.Request, srv *http.Server, q httpActionRequest) {
+	var err error
+	switch q.Action {
+	case "pick":
+		var root string
+		root, err = a.pick(r.Context(), q.Root)
+		if err == nil {
+			reply(w, map[string]string{"root": root})
+			return
+		}
+	case "start":
+		if q.Root == "" {
+			err = fmt.Errorf("Pick a folder first")
+		} else {
+			err = a.startConfiguredScan(q.Root, q.Partial, q.Folders, q.Auto, q.Repair, q.Sort, q.IncludeExtensions, q.MediaSamples, q.PreviewOnly, q.Operation, scanStartOptions{
+				ScopeMode: q.ScopeMode, Subfolders: q.Subfolders, Fresh: q.Fresh, RequestID: q.RequestID, FallbackAI: true,
+			})
+		}
+	case "resume":
+		err = a.resumeWithFallback(q.ID, q.Partial, true)
+	case "apply":
+		err = a.applyRevision(q.ID, q.Start, q.End, q.Excluded, q.Revision)
+	case "apply-selected":
+		if q.Revision == nil {
+			err = fmt.Errorf("Provide the current proposal revision")
+		} else {
+			err = a.applySelectionRevision(q.ID, *q.Revision, q.Indices, q.RowRevisions)
+		}
+	case "apply-all":
+		if q.Revision == nil {
+			err = fmt.Errorf("Provide the current proposal revision")
+		} else {
+			err = a.applyAllReviewed(q.ID, *q.Revision, q.Group, q.Root, q.Count)
+		}
+	case "apply-chosen-names":
+		err = a.applyChosenNames(q.ID, q.ChosenNames)
+	case "change-location":
+		if q.Revision == nil {
+			err = fmt.Errorf("Provide the current proposal revision")
+		} else {
+			err = a.changeLocation(q.ID, *q.Revision, q.Index, q.Root)
+		}
+	case "correct":
+		if q.Revision == nil {
+			err = fmt.Errorf("Provide the current proposal revision")
+		} else {
+			err = a.correct(q.ID, *q.Revision, q.Index, q.Classification, q.Filename)
+		}
+	case "reassess":
+		if q.Revision == nil {
+			err = fmt.Errorf("Provide the current proposal revision")
+		} else {
+			err = a.reassess(q.ID, *q.Revision, q.Indices, q.Group, q.Value, q.Refresh)
+		}
+	case "save-profile", "restore-profile":
+		if q.Revision == nil || q.Action == "save-profile" && q.Settings == nil {
+			err = fmt.Errorf("Provide the current profile revision and complete settings")
+		} else {
+			err = a.saveProfile(*q.Revision, q.Profile, q.Settings, q.Activate || q.Action == "restore-profile")
+		}
+	case "rules":
+		if q.Revision == nil || q.Rules == nil {
+			err = fmt.Errorf("Provide the current rule revision and complete naming rules")
+		} else {
+			err = a.updateRules(*q.Revision, *q.Rules)
+		}
+	case "open-pdf":
+		path, _, readErr := a.previewFile(q.ID, q.Index)
+		if readErr != nil {
+			err = readErr
+		} else if !strings.EqualFold(extension(path), ".pdf") {
+			err = fmt.Errorf("Choose a PDF to open")
+		} else {
+			err = openURL(path)
+		}
+	case "use-review-name":
+		if q.Revision == nil || q.Filename == nil {
+			err = fmt.Errorf("Provide a filename and the current proposal revision")
+		} else {
+			err = a.useReviewName(q.ID, *q.Revision, q.Index, *q.Filename)
+		}
+	case "apply-one":
+		err = a.applyOneRevision(q.ID, q.Index, q.Revision)
+	case "recycle-duplicates", "recycle-duplicate-groups", "recycle-verified-duplicates", "recycle-all-recommendations":
+		if !recycleAvailable {
+			err = fmt.Errorf("The Windows Recycle Bin is unavailable")
+			break
+		}
+		if q.Revision == nil {
+			err = fmt.Errorf("Confirm copies from the current duplicate scan")
+			break
+		}
+		if q.Action == "recycle-duplicates" {
+			if q.Keep == nil {
+				err = fmt.Errorf("Choose a file to keep")
+				break
+			}
+			count, recycleErr := a.recycleMatchedCopies(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices, recycleFile)
+			if recycleErr != nil {
+				err = fmt.Errorf("%d recycled. %w", count, recycleErr)
+				break
+			}
+			reply(w, map[string]int{"recycled": count})
+			return
+		}
+		var receipt duplicateRecycleReceipt
+		var recycleErr error
+		if q.Action == "recycle-all-recommendations" {
+			receipt, recycleErr = a.recycleAllRecommendations(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.VerifiedGroups, recycleFile)
+		} else {
+			receipt, recycleErr = a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
+		}
+		message := ""
+		if recycleErr != nil {
+			message = recycleErr.Error()
+		}
+		reply(w, struct {
+			duplicateRecycleReceipt
+			Error string
+		}{receipt, message})
+		return
+	case "recycle-file":
+		if q.Revision == nil || len(q.Indices) != 1 {
+			err = fmt.Errorf("Confirm one file from the current review")
+		} else {
+			err = a.recycleFlaggedFile(q.ID, *q.Revision, q.Indices[0])
+		}
+	case "bridge":
+		err = a.setBridge(q.Enabled)
+	case "pause":
+		a.pauseRun()
+	case "undo":
+		err = a.undo()
+	case "model":
+		err = a.download()
+	case "select":
+		err = a.selectJob(q.ID)
+	case "open-data":
+		err = openURL(a.home)
+	case "exit":
+		a.shutdownHTTP(w, srv)
+		return
+	default:
+		err = fmt.Errorf("Unknown action")
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	reply(w, map[string]bool{"ok": true})
 }
 
 func reply(w http.ResponseWriter, v any) {

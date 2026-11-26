@@ -346,6 +346,25 @@ func (a *application) finish(err error) {
 		a.jobDone = nil
 	}
 }
+func (s *session) draftCleanupProposals(ctx context.Context, startIndex int) []proposalRow {
+	rules := s.namingRules()
+	var cleanups []proposalRow
+	for i := startIndex; s.manifest.Operation != scanMove && i < s.fileCount && ctx.Err() == nil; i++ {
+		item := s.manifest.Items[i]
+		name := filepath.Base(item.Path)
+		if s.manifest.Auto && strings.EqualFold(extension(name), ".pdf") {
+			continue
+		}
+		cleaned := rules.cleanName(name, false)
+		if !item.Skip && cleaned != name && windowsNameLength(cleaned) <= rules.MaxLength && validProposedName(cleaned, name, false) {
+			cleanups = append(cleanups, proposalRow{Index: i, From: item.Path,
+				To: filepath.Join(filepath.Dir(item.Path), cleaned), Draft: true,
+				Decision: "Cleanup proposed", Reason: "Formatting checked. File inspection and conflict checks are pending."})
+		}
+	}
+	return cleanups
+}
+
 func (a *application) run(ctx context.Context, s *session, partial bool) {
 	if s.manifest.Operation == scanDuplicates {
 		a.runDuplicates(ctx, s)
@@ -373,21 +392,7 @@ func (a *application) run(ctx context.Context, s *session, partial bool) {
 		a.finish(failure)
 		return
 	}
-	rules := s.namingRules()
-	var cleanups []proposalRow
-	for i := startIndex; s.manifest.Operation != scanMove && i < s.fileCount && ctx.Err() == nil; i++ {
-		item := s.manifest.Items[i]
-		name := filepath.Base(item.Path)
-		if s.manifest.Auto && strings.EqualFold(extension(name), ".pdf") {
-			continue
-		}
-		cleaned := rules.cleanName(name, false)
-		if !item.Skip && cleaned != name && windowsNameLength(cleaned) <= rules.MaxLength && validProposedName(cleaned, name, false) {
-			cleanups = append(cleanups, proposalRow{Index: i, From: item.Path,
-				To: filepath.Join(filepath.Dir(item.Path), cleaned), Draft: true,
-				Decision: "Cleanup proposed", Reason: "Formatting checked. File inspection and conflict checks are pending."})
-		}
-	}
+	cleanups := s.draftCleanupProposals(ctx, startIndex)
 	a.mu.Lock()
 	a.cleanup, a.cleanupThrough = cleanups, 0
 	a.mu.Unlock()

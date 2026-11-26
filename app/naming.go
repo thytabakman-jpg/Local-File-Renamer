@@ -400,9 +400,167 @@ func decide(name string, e evidence, a assessment, modelUsed bool) decision {
 	return decideWithRules(name, e, a, modelUsed, defaultRules, "")
 }
 
-func decideWithRules(name string, e evidence, a assessment, modelUsed bool, rules namingRules, override string) (result decision) {
+func decideCoursePaper(name string, e evidence, a assessment, rules namingRules, paper paperName, course string, verified func(string) string) decision {
+	stem, ext := baseName(name), extension(name)
+	const kind = "course_paper"
+	version := paper.version
+	if version == "" {
+		version = pendingVersion
+	}
+	title := paper.title
+	if t := verified(a.Title); meaningful(t) && !titleHeading.MatchString(t) && (!meaningful(title) || rules.PreferSpecificTitle && betterTitle(title, t)) {
+		title = t
+	}
+	if meaningful(e.Title) && !meaningful(title) {
+		title = e.Title
+	}
+	if !meaningful(title) {
+		title = heuristicTitle(e.Text)
+	}
+	var issues []string
+	if !meaningful(title) {
+		return decision{Name: name, Note: "Missing course paper title"}
+	}
+	if course == "" {
+		issues = append(issues, "Missing course code")
+	}
+	if version == pendingVersion {
+		issues = append(issues, versionPendingNote)
+	}
+	if paper.conflict {
+		issues = append(issues, "Conflicting version labels")
+	}
+	if course == "" {
+		return decision{Name: name, Unknown: true, Kind: kind, Note: strings.Join(issues, "; "), Reason: "The course code is unresolved"}
+	}
+	titleSupported := oneOfFirstLines(title, e.Text) || hasEvidence(title, e.Title) || hasEvidence(title, chars(e.Text, 1800))
+	autoEvidence := len(issues) == 0 && titleSupported && paper.version != ""
+	if version != pendingVersion {
+		if rules.VersionFormat == "v_prefix" {
+			version = "V" + version
+		}
+		if rules.VersionFormat == "preserve_marker" {
+			for _, field := range separator.Split(titleSpaces(alternateSeparator.Replace(stem)), -1) {
+				field = clean(field)
+				if versionToken(field) == version {
+					version = field
+					break
+				}
+			}
+		}
+	}
+	return decision{Name: rules.makeName([]string{title, course, version}, ext), Note: strings.Join(issues, "; "), Strict: true, AutoEvidence: autoEvidence, Kind: kind, Reason: "Checked course and version fields against explicit coursework evidence"}
+}
+
+func decidePublication(name string, e evidence, a assessment, rules namingRules, kind, evidenceText string, verified func(string) string) decision {
 	stem, ext := baseName(name), extension(name)
 	oldAuthor, oldYear, oldTitle, oldVenue := citationParts(stem)
+	title := verified(a.Title)
+	if e.ArticleFrontMatter && kind == "article" {
+		title = e.Title
+	}
+	if title == "" {
+		if match := labelledTitle.FindStringSubmatch(chars(e.Text, 1600)); match != nil {
+			title = clean(match[1])
+		}
+	}
+	if !meaningful(title) && meaningful(e.Title) {
+		title = e.Title
+	}
+	if !meaningful(title) {
+		title = matchingFrontTitle(stem, e.Text)
+	}
+	titleSupported := meaningful(title)
+	if !meaningful(title) {
+		title = oldTitle
+	}
+	if !meaningful(title) && meaningful(stem) && oldTitle == "" && !strings.HasPrefix(strings.ToLower(stem), "unknown ") {
+		title = stem
+	}
+	if !meaningful(title) || titleHeading.MatchString(title) {
+		title = ""
+	}
+	authors := a.Authors
+	if e.ArticleFrontMatter && kind == "article" {
+		authors = []string{e.Author}
+	}
+	if len(authors) == 0 {
+		raw := e.Author
+		if !meaningful(raw) {
+			raw = ""
+			if m := labelledAuthor.FindStringSubmatch(chars(e.Text, 2200)); m != nil {
+				raw = m[1]
+			}
+		}
+		if raw != "" {
+			authors = strings.Split(raw, ";")
+		}
+	}
+	var found []string
+	for _, author := range authors {
+		if hasEvidence(author, evidenceText) {
+			found = append(found, author)
+		}
+	}
+	author := authorLabel(found, rules.AuthorFormat)
+	authorSupported := author != ""
+	if oldAuthor != "" && (author == "" || strings.HasSuffix(oldAuthor, " et al") && !strings.HasSuffix(author, " et al")) {
+		author = oldAuthor
+	}
+	year := validYear.FindString(e.Year)
+	if year == "" {
+		year = validYear.FindString(yearLine.FindString(chars(e.Text, 3500)))
+	}
+	if year == "" && validYear.FindString(a.Year) == a.Year && hasEvidence(a.Year, chars(e.Text, 2400)) {
+		year = a.Year
+	}
+	yearSupported := year != ""
+	if year == "" {
+		year = oldYear
+	}
+	venue := publicationVenue(chars(e.Text, 4000), e)
+	if kind == "article" && venue == "" && (articleDOI.MatchString(chars(e.Text, 2400)) || publicationDetails.MatchString(chars(e.Text, 3000))) {
+		venue = verified(a.Venue)
+	}
+	if kind == "academic_book" {
+		venue = e.Publisher
+		if venue == "" {
+			venue = verified(a.Publisher)
+		}
+	}
+	venueSupported := kind == "book" || venue != ""
+	if venue == "" {
+		venue = oldVenue
+	}
+	var issues []string
+	fill := func(value *string, field, label string) {
+		if *value == "" {
+			issues = append(issues, "Missing "+field)
+			*value = "Unknown " + label
+		}
+	}
+	fill(&author, "author", "author")
+	fill(&year, "publication year", "year")
+	fill(&title, "title", "title")
+	switch kind {
+	case "article":
+		fill(&venue, "journal", "journal")
+	case "academic_book":
+		fill(&venue, "publisher", "publisher")
+	default:
+		venue = ""
+	}
+	complete := titleSupported && authorSupported && yearSupported && venueSupported && len(issues) == 0
+	if len(issues) == 0 && !complete {
+		issues = append(issues, "Some existing citation fields could not be verified in the file")
+	}
+	d := decision{Name: rules.makeName([]string{author, year, title, venue}, ext), Note: strings.Join(issues, "; "), Unknown: len(issues) > 0, Strict: true, AutoEvidence: complete, Kind: kind, Reason: "Checked citation fields against publication evidence"}
+	d.ReplaceDownloadID = kind == "article" && complete && doiDownloadFilename(name, extractDOI(e.Text))
+	return preservePublicationName(name, d)
+}
+
+func decideWithRules(name string, e evidence, a assessment, modelUsed bool, rules namingRules, override string) (result decision) {
+	stem, ext := baseName(name), extension(name)
 	evidenceText := e.Text + "\n" + e.Title + "\n" + e.Author + "\n" + e.Year + "\n" + e.Publisher + "\n" + e.Venue
 	verified := func(s string) string {
 		if hasEvidence(s, evidenceText) {
@@ -445,157 +603,10 @@ func decideWithRules(name string, e evidence, a assessment, modelUsed bool, rule
 	}
 
 	if kind == "course_paper" {
-		version := paper.version
-		if version == "" {
-			version = pendingVersion
-		}
-		title := paper.title
-		if t := verified(a.Title); meaningful(t) && !titleHeading.MatchString(t) && (!meaningful(title) || rules.PreferSpecificTitle && betterTitle(title, t)) {
-			title = t
-		}
-		if meaningful(e.Title) && !meaningful(title) {
-			title = e.Title
-		}
-		if !meaningful(title) {
-			title = heuristicTitle(e.Text)
-		}
-		var issues []string
-		if !meaningful(title) {
-			return decision{Name: name, Note: "Missing course paper title"}
-		}
-		if course == "" {
-			issues = append(issues, "Missing course code")
-		}
-		if version == pendingVersion {
-			issues = append(issues, versionPendingNote)
-		}
-		if paper.conflict {
-			issues = append(issues, "Conflicting version labels")
-		}
-		if course == "" {
-			return decision{Name: name, Unknown: true, Kind: kind, Note: strings.Join(issues, "; "), Reason: "The course code is unresolved"}
-		}
-		titleSupported := oneOfFirstLines(title, e.Text) || hasEvidence(title, e.Title) || hasEvidence(title, chars(e.Text, 1800))
-		autoEvidence := len(issues) == 0 && titleSupported && paper.version != ""
-		if version != pendingVersion {
-			if rules.VersionFormat == "v_prefix" {
-				version = "V" + version
-			}
-			if rules.VersionFormat == "preserve_marker" {
-				for _, field := range separator.Split(titleSpaces(alternateSeparator.Replace(stem)), -1) {
-					field = clean(field)
-					if versionToken(field) == version {
-						version = field
-						break
-					}
-				}
-			}
-		}
-		return decision{Name: rules.makeName([]string{title, course, version}, ext), Note: strings.Join(issues, "; "), Strict: true, AutoEvidence: autoEvidence, Kind: kind, Reason: "Checked course and version fields against explicit coursework evidence"}
+		return decideCoursePaper(name, e, a, rules, paper, course, verified)
 	}
 	if slices.Contains([]string{"article", "book", "academic_book"}, kind) {
-		title := verified(a.Title)
-		if e.ArticleFrontMatter && kind == "article" {
-			title = e.Title
-		}
-		if title == "" {
-			if match := labelledTitle.FindStringSubmatch(chars(e.Text, 1600)); match != nil {
-				title = clean(match[1])
-			}
-		}
-		if !meaningful(title) && meaningful(e.Title) {
-			title = e.Title
-		}
-		if !meaningful(title) {
-			title = matchingFrontTitle(stem, e.Text)
-		}
-		titleSupported := meaningful(title)
-		if !meaningful(title) {
-			title = oldTitle
-		}
-		if !meaningful(title) && meaningful(stem) && oldTitle == "" && !strings.HasPrefix(strings.ToLower(stem), "unknown ") {
-			title = stem
-		}
-		if !meaningful(title) || titleHeading.MatchString(title) {
-			title = ""
-		}
-		authors := a.Authors
-		if e.ArticleFrontMatter && kind == "article" {
-			authors = []string{e.Author}
-		}
-		if len(authors) == 0 {
-			raw := e.Author
-			if !meaningful(raw) {
-				raw = ""
-				if m := labelledAuthor.FindStringSubmatch(chars(e.Text, 2200)); m != nil {
-					raw = m[1]
-				}
-			}
-			if raw != "" {
-				authors = strings.Split(raw, ";")
-			}
-		}
-		var found []string
-		for _, author := range authors {
-			if hasEvidence(author, evidenceText) {
-				found = append(found, author)
-			}
-		}
-		author := authorLabel(found, rules.AuthorFormat)
-		authorSupported := author != ""
-		if oldAuthor != "" && (author == "" || strings.HasSuffix(oldAuthor, " et al") && !strings.HasSuffix(author, " et al")) {
-			author = oldAuthor
-		}
-		year := validYear.FindString(e.Year)
-		if year == "" {
-			year = validYear.FindString(yearLine.FindString(chars(e.Text, 3500)))
-		}
-		if year == "" && validYear.FindString(a.Year) == a.Year && hasEvidence(a.Year, chars(e.Text, 2400)) {
-			year = a.Year
-		}
-		yearSupported := year != ""
-		if year == "" {
-			year = oldYear
-		}
-		venue := publicationVenue(chars(e.Text, 4000), e)
-		if kind == "article" && venue == "" && (articleDOI.MatchString(chars(e.Text, 2400)) || publicationDetails.MatchString(chars(e.Text, 3000))) {
-			venue = verified(a.Venue)
-		}
-		if kind == "academic_book" {
-			venue = e.Publisher
-			if venue == "" {
-				venue = verified(a.Publisher)
-			}
-		}
-		venueSupported := kind == "book" || venue != ""
-		if venue == "" {
-			venue = oldVenue
-		}
-		var issues []string
-		fill := func(value *string, field, label string) {
-			if *value == "" {
-				issues = append(issues, "Missing "+field)
-				*value = "Unknown " + label
-			}
-		}
-		fill(&author, "author", "author")
-		fill(&year, "publication year", "year")
-		fill(&title, "title", "title")
-		switch kind {
-		case "article":
-			fill(&venue, "journal", "journal")
-		case "academic_book":
-			fill(&venue, "publisher", "publisher")
-		default:
-			venue = ""
-		}
-		complete := titleSupported && authorSupported && yearSupported && venueSupported && len(issues) == 0
-		if len(issues) == 0 && !complete {
-			issues = append(issues, "Some existing citation fields could not be verified in the file")
-		}
-		d := decision{Name: rules.makeName([]string{author, year, title, venue}, ext), Note: strings.Join(issues, "; "), Unknown: len(issues) > 0, Strict: true, AutoEvidence: complete, Kind: kind, Reason: "Checked citation fields against publication evidence"}
-		d.ReplaceDownloadID = kind == "article" && complete && doiDownloadFilename(name, extractDOI(e.Text))
-		return preservePublicationName(name, d)
+		return decidePublication(name, e, a, rules, kind, evidenceText, verified)
 	}
 	return decideGeneral(name, e, a, modelUsed, rules)
 }

@@ -14,9 +14,22 @@ type chosenName struct {
 }
 
 func (a *application) apply(id string, start, end int, excluded []int) error {
+	return a.applyRevision(id, start, end, excluded, nil)
+}
+
+func (a *application) applyRevision(id string, start, end int, excluded []int, revision *uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if revision != nil && a.v.Revision != *revision {
+		return errors.New("The preview changed. Review it again before applying")
+	}
 	return a.applyLocked(id, start, end, excluded)
+}
+
+func (a *application) applySelectionRevision(id string, revision uint64, indexes []int, rowRevisions map[int]uint64) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.applySelectionLocked(id, revision, indexes, rowRevisions)
 }
 
 func (a *application) applyLocked(id string, start, end int, excluded []int) error {

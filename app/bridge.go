@@ -123,6 +123,57 @@ func (a *application) bridge(w http.ResponseWriter, r *http.Request) {
 	reply(w, response)
 }
 
+func (a *application) startBridgeScan(cmd bridgeCommand) (any, error) {
+	if !filepath.IsAbs(cmd.Root) {
+		return nil, errors.New("Provide the full path of the folder to preview")
+	}
+	jobID := time.Now().UTC().Format("20060102T150405.000000000") + "-" + token()[:12]
+	setup := scanStartOptions{ScopeMode: cmd.ScopeMode, Subfolders: cmd.Subfolders, Fresh: cmd.Fresh, FallbackAI: true, JobID: jobID}
+	err := a.launchScan(cmd.Root, cmd.Partial, cmd.Profile, cmd.Operation, setup, func(opts *scanSettings) error {
+		updated, patchErr := patchSettings(*opts, cmd.Changes)
+		if patchErr != nil {
+			return patchErr
+		}
+		*opts = updated
+		if err := setup.configure(opts, cmd.Extensions); err != nil {
+			return err
+		}
+		if opts.Execution.Mode == "automatic" && cmd.Operation != scanMove && cmd.Operation != scanDuplicates && !cmd.Authorized {
+			return errors.New("This profile applies some naming rules automatically. Use an authorised start or a preview profile.")
+		}
+		if cmd.Folders != nil {
+			opts.Execution.FolderRenames = *cmd.Folders
+		}
+		if cmd.Repair != nil {
+			opts.Execution.Metadata = *cmd.Repair
+		}
+		if cmd.Sort != nil {
+			opts.Execution.Moves = *cmd.Sort
+		}
+		if cmd.MediaSamples != nil {
+			opts.Evidence.MediaSamples = *cmd.MediaSamples
+		}
+		return validateSettings(*opts)
+	})
+	return map[string]any{"job": jobID, "phase": "indexing"}, err
+}
+
+func (a *application) applyBridgeCommand(cmd bridgeCommand, revision uint64) (any, error) {
+	if cmd.PlanID != "" {
+		if !cmd.Authorized || cmd.Revision == nil || len(cmd.Indices) != 0 || len(cmd.Destinations) != 0 || cmd.Resume {
+			return nil, errors.New("Apply the exact duplicate plan only with explicit authorization, its original revision, and no other selection")
+		}
+		if !recycleAvailable {
+			return nil, errors.New("The Windows Recycle Bin is unavailable")
+		}
+		return a.applyExactBatch(context.Background(), cmd.Job, cmd.PlanID, revision, recycleFile)
+	}
+	if !cmd.Authorized || cmd.Revision == nil {
+		return nil, errors.New("Apply requires an authorized selection and the current proposal revision")
+	}
+	return a.bridgeApplySelection(cmd.Job, revision, cmd.Indices, cmd.Resume, cmd.Destinations)
+}
+
 func (a *application) bridgeAction(cmd bridgeCommand) (any, error) {
 	var response any = map[string]bool{"ok": true}
 	var err error
@@ -160,38 +211,7 @@ func (a *application) bridgeAction(cmd bridgeCommand) (any, error) {
 		response = map[string]any{"version": appVersion, "running_app_version": appVersion, "stdio_bridge_version": cmd.ClientVersion,
 			"connection_api": bridgeVersion, "tools": names, "page_size": 100, "max_reassessment": 200}
 	case "start":
-		if !filepath.IsAbs(cmd.Root) {
-			return nil, errors.New("Provide the full path of the folder to preview")
-		}
-		jobID := time.Now().UTC().Format("20060102T150405.000000000") + "-" + token()[:12]
-		setup := scanStartOptions{ScopeMode: cmd.ScopeMode, Subfolders: cmd.Subfolders, Fresh: cmd.Fresh, FallbackAI: true, JobID: jobID}
-		err = a.launchScan(cmd.Root, cmd.Partial, cmd.Profile, cmd.Operation, setup, func(opts *scanSettings) error {
-			updated, patchErr := patchSettings(*opts, cmd.Changes)
-			if patchErr != nil {
-				return patchErr
-			}
-			*opts = updated
-			if err := setup.configure(opts, cmd.Extensions); err != nil {
-				return err
-			}
-			if opts.Execution.Mode == "automatic" && cmd.Operation != scanMove && cmd.Operation != scanDuplicates && !cmd.Authorized {
-				return errors.New("This profile applies some naming rules automatically. Use an authorised start or a preview profile.")
-			}
-			if cmd.Folders != nil {
-				opts.Execution.FolderRenames = *cmd.Folders
-			}
-			if cmd.Repair != nil {
-				opts.Execution.Metadata = *cmd.Repair
-			}
-			if cmd.Sort != nil {
-				opts.Execution.Moves = *cmd.Sort
-			}
-			if cmd.MediaSamples != nil {
-				opts.Evidence.MediaSamples = *cmd.MediaSamples
-			}
-			return validateSettings(*opts)
-		})
-		response = map[string]any{"job": jobID, "phase": "indexing"}
+		return a.startBridgeScan(cmd)
 	case "get_settings":
 		info, infoErr := a.settingsInfo(cmd.Profile)
 		if infoErr != nil || len(cmd.Fields) == 0 {
@@ -283,19 +303,7 @@ func (a *application) bridgeAction(cmd bridgeCommand) (any, error) {
 		}
 		err = a.reassess(cmd.Job, revision(), cmd.Indices, cmd.Group, cmd.Value, cmd.Refresh)
 	case "apply":
-		if cmd.PlanID != "" {
-			if !cmd.Authorized || cmd.Revision == nil || len(cmd.Indices) != 0 || len(cmd.Destinations) != 0 || cmd.Resume {
-				return nil, errors.New("Apply the exact duplicate plan only with explicit authorization, its original revision, and no other selection")
-			}
-			if !recycleAvailable {
-				return nil, errors.New("The Windows Recycle Bin is unavailable")
-			}
-			return a.applyExactBatch(context.Background(), cmd.Job, cmd.PlanID, revision(), recycleFile)
-		}
-		if !cmd.Authorized || cmd.Revision == nil {
-			return nil, errors.New("Apply requires an authorized selection and the current proposal revision")
-		}
-		return a.bridgeApplySelection(cmd.Job, revision(), cmd.Indices, cmd.Resume, cmd.Destinations)
+		return a.applyBridgeCommand(cmd, revision())
 	case "undo":
 		if !cmd.Authorized {
 			return nil, errors.New("Undo requires authorization for the specified run")

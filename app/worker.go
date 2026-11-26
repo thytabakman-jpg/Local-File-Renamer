@@ -195,6 +195,87 @@ func addPDFEvidence(ctx context.Context, path string, opts scanSettings, pre *pr
 	return true
 }
 
+func supplementPDFEvidence(ctx context.Context, s *session, opts scanSettings, item entry, name, override string, e evidence, reused bool, ocrStatus string, transcribe transcribePage) (evidence, string, int64, error) {
+	var ocrMS int64
+	var ocrErr error
+	if !reused && opts.Evidence.UseOCR && strings.EqualFold(extension(item.Path), ".pdf") && transcribe != nil && ctx.Err() == nil &&
+		(len(e.Text) < 35 || opts.Evidence.OCRUnresolved && unresolvedPDF(s, opts, item.Path, name, override, e)) {
+		ocrStart := time.Now()
+		extracted, note, err := scanOCRWithError(ctx, item.Path, transcribe, opts.Evidence.OCRPages)
+		ocrMS, ocrStatus, ocrErr = elapsedMS(ocrStart), note, err
+		if extracted != "" {
+			if len(e.Text) < 35 {
+				e.Text = chars(extracted, opts.Evidence.TextBytes)
+			} else if !strings.Contains(norm(e.Text), norm(extracted)) {
+				e.Text = chars(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+extracted, opts.Evidence.TextBytes)
+			}
+			e.Note, ocrStatus = "", "Read sampled pages"
+		} else {
+			e.Note = joinNote(e.Note, note)
+		}
+	}
+	return e, ocrStatus, ocrMS, ocrErr
+}
+
+func finalizeInspectionDecision(d decision, check inspection, name string, e evidence, vision, automatic bool, opts scanSettings, modelErr error) (decision, inspection) {
+	rules := opts.Naming
+	cleaned := rules.cleanName(d.Name, false)
+	formattingOnlyPDF := automatic && d.Name == name && strings.EqualFold(extension(name), ".pdf")
+	if !formattingOnlyPDF && cleaned != d.Name && (cleaned == name || windowsNameLength(cleaned) <= rules.MaxLength) {
+		if d.Name == name {
+			d.Outcome = "Cleanup proposed"
+			d.Reason = "Applied filename formatting and configured spelling rules"
+		}
+		d.Name = cleaned
+	}
+	if d.Name != name && d.Name != "" {
+		d.Name = rules.normalizeGeneratedName(name, d.Name)
+	}
+	if photoExtension(name) && !vision {
+		check.AI = "Off"
+		d.Note = ""
+		d.Outcome = "Not assessed"
+		d.Reason = "Image content was not assessed because local AI is off. Any formatting proposal uses the filename only."
+	}
+	if e.Note != "" && d.Outcome != "Not assessed" && !strings.Contains(d.Note, e.Note) {
+		d.Note = joinNote(d.Note, e.Note)
+	}
+	if d.Outcome == "" {
+		switch {
+		case d.Unknown || d.Name == name && d.Note != "":
+			d.Outcome = "Insufficient evidence"
+		case d.Name != name:
+			d.Outcome = "Rename proposed"
+		case d.Strict && (check.Text || check.Metadata):
+			d.Outcome = "Name verified"
+		default:
+			d.Outcome = "Insufficient evidence"
+		}
+	}
+	if modelErr != nil {
+		var note string
+		check.AI, note = localAIIssue(modelErr)
+		d.Outcome = "Analysis failed"
+		check.AIContribution = "Analysis failed"
+		d.Note = joinNote(d.Note, note)
+		d.Strict = false
+	}
+	if !check.Text && !check.Image && !check.Metadata {
+		d.Strict = false
+	}
+	if d.Name != name && !rules.protect(name, d.Name) {
+		d.Name, d.Strict, d.Outcome = name, false, "Needs review"
+		d.Note = joinNote(d.Note, "The alternative name would remove a protected word or identifier")
+	}
+	if (d.Outcome == "Insufficient evidence" || d.Outcome == "Analysis failed" || d.Unknown || d.Note != "") && opts.Recovery.Uncertainty != "propose_with_warning" && d.Outcome != "Cleanup proposed" {
+		d.Name, d.Strict = name, false
+		if opts.Recovery.Uncertainty == "keep" && d.Outcome != "Analysis failed" && !d.Unknown {
+			d.Outcome = "Name kept by preference"
+		}
+	}
+	return d, check
+}
+
 func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcribe transcribePage, i int, override string, refresh bool, opts scanSettings, pre *preparedEvidence) (result decision, original stamp, failure error) {
 	started := time.Now()
 	rules := opts.Naming
@@ -238,25 +319,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		pre = &p
 	}
 	cached, reused, e, readMS := pre.Cached, pre.Reused, pre.Evidence, pre.ReadMS
-	ocrStatus := cached.OCR
-	var ocrMS int64
-	var ocrErr error
-	if !reused && opts.Evidence.UseOCR && strings.EqualFold(extension(item.Path), ".pdf") && transcribe != nil && ctx.Err() == nil &&
-		(len(e.Text) < 35 || opts.Evidence.OCRUnresolved && unresolvedPDF(s, opts, item.Path, name, override, e)) {
-		ocrStart := time.Now()
-		extracted, note, err := scanOCRWithError(ctx, item.Path, transcribe, opts.Evidence.OCRPages)
-		ocrMS, ocrStatus, ocrErr = elapsedMS(ocrStart), note, err
-		if extracted != "" {
-			if len(e.Text) < 35 {
-				e.Text = chars(extracted, opts.Evidence.TextBytes)
-			} else if !strings.Contains(norm(e.Text), norm(extracted)) {
-				e.Text = chars(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+extracted, opts.Evidence.TextBytes)
-			}
-			e.Note, ocrStatus = "", "Read sampled pages"
-		} else {
-			e.Note = joinNote(e.Note, note)
-		}
-	}
+	e, ocrStatus, ocrMS, ocrErr := supplementPDFEvidence(ctx, s, opts, item, name, override, e, reused, cached.OCR, transcribe)
 
 	if s.manifest.Operation == scanMove {
 		return inspectLocation(ctx, s, assess, opts, item.Path, name, cacheName, *pre, e, ocrStatus, ocrMS, ocrErr, refresh), st, ctx.Err()
@@ -355,60 +418,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 			}
 		}
 	}
-	cleaned := rules.cleanName(d.Name, false)
-	formattingOnlyPDF := s.manifest.Auto && d.Name == name && strings.EqualFold(extension(name), ".pdf")
-	if !formattingOnlyPDF && cleaned != d.Name && (cleaned == name || windowsNameLength(cleaned) <= rules.MaxLength) {
-		if d.Name == name {
-			d.Outcome = "Cleanup proposed"
-			d.Reason = "Applied filename formatting and configured spelling rules"
-		}
-		d.Name = cleaned
-	}
-	if d.Name != name && d.Name != "" {
-		d.Name = rules.normalizeGeneratedName(name, d.Name)
-	}
-	if photoExtension(name) && !vision {
-		check.AI = "Off"
-		d.Note = ""
-		d.Outcome = "Not assessed"
-		d.Reason = "Image content was not assessed because local AI is off. Any formatting proposal uses the filename only."
-	}
-	if e.Note != "" && d.Outcome != "Not assessed" && !strings.Contains(d.Note, e.Note) {
-		d.Note = joinNote(d.Note, e.Note)
-	}
-	if d.Outcome == "" {
-		switch {
-		case d.Unknown || d.Name == name && d.Note != "":
-			d.Outcome = "Insufficient evidence"
-		case d.Name != name:
-			d.Outcome = "Rename proposed"
-		case d.Strict && (check.Text || check.Metadata):
-			d.Outcome = "Name verified"
-		default:
-			d.Outcome = "Insufficient evidence"
-		}
-	}
-	if modelErr != nil {
-		var note string
-		check.AI, note = localAIIssue(modelErr)
-		d.Outcome = "Analysis failed"
-		check.AIContribution = "Analysis failed"
-		d.Note = joinNote(d.Note, note)
-		d.Strict = false
-	}
-	if !check.Text && !check.Image && !check.Metadata {
-		d.Strict = false
-	}
-	if d.Name != name && !rules.protect(name, d.Name) {
-		d.Name, d.Strict, d.Outcome = name, false, "Needs review"
-		d.Note = joinNote(d.Note, "The alternative name would remove a protected word or identifier")
-	}
-	if (d.Outcome == "Insufficient evidence" || d.Outcome == "Analysis failed" || d.Unknown || d.Note != "") && opts.Recovery.Uncertainty != "propose_with_warning" && d.Outcome != "Cleanup proposed" {
-		d.Name, d.Strict = name, false
-		if opts.Recovery.Uncertainty == "keep" && d.Outcome != "Analysis failed" && !d.Unknown {
-			d.Outcome = "Name kept by preference"
-		}
-	}
+	d, check = finalizeInspectionDecision(d, check, name, e, vision, s.manifest.Auto, opts, modelErr)
 	check.Checklist = d.Checklist
 	d.Inspection = check
 	destination, sortNote := s.sortIndex.suggest(item.Path, e, a, used)
