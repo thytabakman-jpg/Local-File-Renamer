@@ -5,61 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 )
-
-type batchReport struct {
-	Job                                         string
-	Phase                                       string
-	Revision                                    uint64
-	Total, Assessed, Drafts, Cached             int
-	Decisions, Classifications                  map[string]int
-	AI                                          map[string]int
-	ReadMS, OCRMS, StartupMS, ModelMS, RenameMS int64
-	PromptMS, GenerationMS                      int64
-	Clock                                       scanClock
-	AIContribution                              map[string]int
-	Receipt                                     completionReceipt
-}
-
-func (a *application) report(id string) (batchReport, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	s := a.s
-	if s == nil || id != "" && id != a.v.Job || a.v.Busy && !a.scanActive && a.v.Phase != "reassessing" {
-		return batchReport{}, errors.New("No matching live or saved batch report is available")
-	}
-	report := batchReport{
-		Job: a.v.Job, Phase: a.v.Phase, Revision: s.planRevision, Total: s.fileCount,
-		Drafts: len(a.cleanup) - a.cleanupThrough, Clock: a.v.Clock.at(time.Now()),
-		Decisions: make(map[string]int), Classifications: make(map[string]int), AI: make(map[string]int), AIContribution: make(map[string]int), Receipt: s.receipt(),
-	}
-	for _, plan := range s.plans[:min(s.fileCount, len(s.plans))] {
-		report.Assessed++
-		report.Decisions[planOutcome(plan)]++
-		if plan.Kind != "" {
-			report.Classifications[plan.Kind]++
-		}
-		check := plan.Inspection
-		if check.AI != "" {
-			report.AI[check.AI]++
-		}
-		if check.AIContribution != "" {
-			report.AIContribution[check.AIContribution]++
-		}
-		if check.Cache != "" {
-			report.Cached++
-		}
-		report.ReadMS += check.ReadMS
-		report.OCRMS += check.OCRMS
-		report.StartupMS += check.StartupMS
-		report.ModelMS += check.ModelMS
-		report.PromptMS += check.PromptMS
-		report.GenerationMS += check.GenerationMS
-		report.RenameMS += s.outcomes[plan.Index].RenameMS
-	}
-	return report, nil
-}
 
 var classifications = []string{"article", "academic_book", "book", "course_paper", "presentation", "other"}
 
@@ -283,106 +229,37 @@ func (a *application) reassess(id string, revision uint64, indexes []int, group,
 	return nil
 }
 
-func (a *application) applySelected(id string, revision uint64, indexes []int, resume bool) error {
+func (a *application) undo() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if resume {
-		if a.v.Phase != "apply-paused" || revision != a.v.Revision || len(indexes) != 0 {
-			return errors.New("Resume applies the saved selection and takes no new indices")
-		}
-		return a.applyLocked(id, 0, 0, nil)
-	}
-	return a.applySelectionLocked(id, revision, indexes, nil)
+	return a.undoLocked()
 }
 
-func (a *application) applySelectionLocked(id string, revision uint64, indexes []int, rowRevisions map[int]uint64) error {
+func (a *application) undoLocked() error {
+	if a.v.Busy || a.v.Closing || a.s == nil || a.v.UndoLeft == 0 && !a.v.Pending {
+		return errors.New("There are no changes to undo")
+	}
 	s := a.s
-	if s == nil || id != a.v.Job || a.v.Busy && !a.liveReview() || a.v.Closing ||
-		s.settings().Execution.Mode == "preview_only" || s.pending != nil || s.applyPending() ||
-		s.undoCount != 0 || s.metadataUndone != 0 {
-		return errors.New("The current run is unavailable for applying changes")
+	if len(s.selection) > 0 {
+		return errors.New("Resume applying the approved selection before undoing changes")
 	}
-	if !a.liveReview() && a.v.Phase != "preview" && a.v.Phase != "paused" && a.v.Phase != "complete" {
-		return errors.New("There is no current selection to apply")
-	}
-	seen := make(map[int]bool, len(indexes))
-	for _, i := range indexes {
-		seenRevision := revision
-		if rowRevisions != nil {
-			seenRevision = rowRevisions[i]
+	a.begin("undo")
+	go func() {
+		err := validateRoot(s.manifest.Root)
+		a.mu.Lock()
+		if err == nil && s.pending != nil {
+			err = s.finishPending()
 		}
-		if i < s.applyThrough || i >= s.reviewEnd() || !s.rowUnchanged(i, seenRevision) || seen[i] || !s.reviewable(s.plans[i]) {
-			return errors.New("The selection contains a duplicate, changed or ineligible proposal")
+		for err == nil && (len(s.moves) > s.undoCount || len(s.repaired) > s.metadataUndone) && !a.pause {
+			err = s.undoNext()
+			a.syncSession(false)
+			a.mu.Unlock()
+			a.mu.Lock()
 		}
-		seen[i] = true
-	}
-	if len(seen) == 0 {
-		return errors.New("Select at least one proposal for apply")
-	}
-	if err := validateRoot(s.manifest.Root); err != nil {
-		return err
-	}
-	if err := s.append(record{Type: "apply-selection", Selection: indexes}); err != nil {
-		return err
-	}
-	if a.liveReview() || len(indexes) == 1 {
-		err := s.finishSelection()
-		a.syncSession(true)
-		return err
-	}
-	return a.applyLocked(id, 0, 0, nil)
-}
-
-func (s *session) applyNextSelection() (writeFailure, journalFailure error) {
-	i := s.selection[0]
-	plan := s.plans[i]
-	if plan.Move != nil && !s.autoCompleted[i] {
-		if plan.Move.Stamp.Dir && s.folderHasUnappliedChild(plan.Path) {
-			if err := s.append(record{Type: "single-failed", Index: i, Status: "Rename failed", Note: "Apply the child renames before renaming the folder"}); err != nil {
-				return nil, err
-			}
-		} else if err := s.renamePlan(plan, singleRename); err != nil {
-			return nil, err
-		}
-		if outcome := s.outcomes[i]; outcome.Type == "single-failed" {
-			writeFailure = errors.New(outcome.Note)
-		}
-	}
-	if plan.Metadata != nil && (plan.Move == nil || s.autoCompleted[i]) && !s.metadataApproved(i) {
-		if err := s.append(record{Type: "selected-metadata", Index: i}); err != nil {
-			return writeFailure, err
-		}
-	}
-	return writeFailure, s.append(record{Type: "selection-done", Index: i})
-}
-
-func (s *session) finishSelection() error {
-	var failures []error
-	for len(s.selection) > 0 {
-		failure, err := s.applyNextSelection()
-		if err != nil {
-			return err
-		}
-		failures = append(failures, failure)
-	}
-	for s.metadataIndex < len(s.metadataPlans) {
-		if err := s.metadataNext(); err != nil {
-			return err
-		}
-	}
-	return errors.Join(failures...)
-}
-
-func (a *application) useReviewName(id string, revision uint64, index int, name string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if err := a.correctLocked(id, revision, index, "", &name); err != nil {
-		return err
-	}
-	if a.s.plans[index].Move == nil {
-		return nil
-	}
-	return a.applySelectionLocked(id, a.v.Revision, []int{index}, nil)
+		a.mu.Unlock()
+		a.finish(err)
+	}()
+	return nil
 }
 
 func (a *application) undoJob(id string) error { return a.undoJobRevision(id, nil) }
@@ -395,70 +272,3 @@ func (a *application) undoJobRevision(id string, revision *uint64) error {
 	return a.undoLocked()
 }
 
-func (a *application) changeLocation(id string, revision uint64, index int, destination string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.s != nil && a.s.rowUnchanged(index, revision) {
-		revision = a.v.Revision
-	}
-	s, err := a.editable(id, revision)
-	if err != nil {
-		return err
-	}
-	prior, err := s.checkEditable(index)
-	if err != nil {
-		return err
-	}
-	if s.manifest.Items[index].Folder || s.settings().Execution.Mode == "preview_only" {
-		return errors.New("This run does not allow editing file destinations")
-	}
-	if !s.manifest.SortFolders && prior.Move == nil {
-		return errors.New("Enable folder moves when starting the scan")
-	}
-	parent := filepath.Dir(prior.Path)
-	destination = strings.TrimSpace(destination)
-	if destination == "" {
-		destination = parent
-	}
-	if !filepath.IsAbs(destination) {
-		return errors.New("Choose an existing folder inside the scan folder")
-	}
-	destination = filepath.Clean(destination)
-	if !within(s.manifest.Root, destination) {
-		return errors.New("Choose a destination inside the selected folder")
-	}
-	if destination != parent && !s.manifest.SortFolders {
-		return errors.New("Enable folder moves when starting the scan")
-	}
-	if err := safeParent(s.manifest.Root, prior.Path); err != nil {
-		return err
-	}
-	st, err := fingerprint(prior.Path)
-	if err != nil || st.Dir || st != prior.Stamp {
-		return errors.New("The original changed since inspection. Reassess it first.")
-	}
-	name := filepath.Base(prior.Path)
-	if prior.Move != nil {
-		name = filepath.Base(prior.Move.To)
-	}
-	reason := "The operator selected the destination folder"
-	if destination == parent {
-		reason = "The operator kept the file in its current folder"
-	}
-	d := decision{Name: name, Folder: destination, Metadata: prior.Metadata, Note: prior.Note, Kind: prior.Kind,
-		Inspection: prior.Inspection, Unknown: prior.Unknown, Outcome: "Rename proposed", Reason: reason}
-	if destination == parent && name == filepath.Base(prior.Path) {
-		d.Outcome = "Name kept by operator"
-	}
-	plan := buildSuggestion(s, index, d, st, true)
-	if (destination != parent || name != filepath.Base(prior.Path)) &&
-		(plan.Move == nil || filepath.Dir(plan.Move.To) != destination) {
-		return errors.New(plan.Note)
-	}
-	plan.OverrideKind = prior.OverrideKind
-	if err := s.append(plan); err != nil {
-		return err
-	}
-	a.syncSession(true)
-	return nil
-}

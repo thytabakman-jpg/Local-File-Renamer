@@ -97,6 +97,13 @@ func (scope scanScope) description() string {
 	return strings.Join(parts, " · ")
 }
 
+func (s *session) availableTypes() []string {
+	if s.manifest.Inventory != nil {
+		return s.manifest.Inventory.FileTypes
+	}
+	return nil
+}
+
 func (a *application) start(root string, partial, folders, auto, repair, sortFiles bool) error {
 	return a.startFiltered(root, partial, folders, auto, repair, sortFiles, nil)
 }

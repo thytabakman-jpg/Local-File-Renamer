@@ -14,6 +14,15 @@ type metadataTransaction struct {
 	Before, After, BackupStamp stamp
 }
 
+func (s *session) metadataApproved(index int) bool {
+	for _, plan := range s.metadataPlans {
+		if plan.Index == index {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *session) metadataNext() error {
 	plan := s.metadataPlans[s.metadataIndex]
 	path := s.currentPath(plan.Path, plan.Index)

@@ -129,6 +129,38 @@ func (a *application) runDuplicates(ctx context.Context, s *session) {
 	a.finish(failure)
 }
 
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(buf []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(buf)
+}
+func comparisonHash(ctx context.Context, path string) (string, error) {
+	st, err := fingerprint(path)
+	if err != nil || st.Dir {
+		return "", errors.New("Cannot record identity for comparison")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err = io.Copy(h, contextReader{ctx, f}); err != nil {
+		return "", err
+	}
+	end, err := fingerprint(path)
+	if err != nil || st != end {
+		return "", errors.New("File changed while recording its comparison identity")
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func scopedDuplicateHash(ctx context.Context, root *os.Root, path string) (string, error) {
 	before, err := root.Lstat(path)
 	if err != nil {

@@ -274,3 +274,97 @@ func (s *session) prepareMoveFolder(m *move) error {
 	m.TargetParent = target.ID
 	return s.validateMoveParents(*m)
 }
+
+func (a *application) changeLocation(id string, revision uint64, index int, destination string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.s != nil && a.s.rowUnchanged(index, revision) {
+		revision = a.v.Revision
+	}
+	s, err := a.editable(id, revision)
+	if err != nil {
+		return err
+	}
+	prior, err := s.checkEditable(index)
+	if err != nil {
+		return err
+	}
+	if s.manifest.Items[index].Folder || s.settings().Execution.Mode == "preview_only" {
+		return errors.New("This run does not allow editing file destinations")
+	}
+	if !s.manifest.SortFolders && prior.Move == nil {
+		return errors.New("Enable folder moves when starting the scan")
+	}
+	parent := filepath.Dir(prior.Path)
+	destination = strings.TrimSpace(destination)
+	if destination == "" {
+		destination = parent
+	}
+	if !filepath.IsAbs(destination) {
+		return errors.New("Choose an existing folder inside the scan folder")
+	}
+	destination = filepath.Clean(destination)
+	if !within(s.manifest.Root, destination) {
+		return errors.New("Choose a destination inside the selected folder")
+	}
+	if destination != parent && !s.manifest.SortFolders {
+		return errors.New("Enable folder moves when starting the scan")
+	}
+	if err := safeParent(s.manifest.Root, prior.Path); err != nil {
+		return err
+	}
+	st, err := fingerprint(prior.Path)
+	if err != nil || st.Dir || st != prior.Stamp {
+		return errors.New("The original changed since inspection. Reassess it first.")
+	}
+	name := filepath.Base(prior.Path)
+	if prior.Move != nil {
+		name = filepath.Base(prior.Move.To)
+	}
+	reason := "The operator selected the destination folder"
+	if destination == parent {
+		reason = "The operator kept the file in its current folder"
+	}
+	d := decision{Name: name, Folder: destination, Metadata: prior.Metadata, Note: prior.Note, Kind: prior.Kind,
+		Inspection: prior.Inspection, Unknown: prior.Unknown, Outcome: "Rename proposed", Reason: reason}
+	if destination == parent && name == filepath.Base(prior.Path) {
+		d.Outcome = "Name kept by operator"
+	}
+	plan := buildSuggestion(s, index, d, st, true)
+	if (destination != parent || name != filepath.Base(prior.Path)) &&
+		(plan.Move == nil || filepath.Dir(plan.Move.To) != destination) {
+		return errors.New(plan.Note)
+	}
+	plan.OverrideKind = prior.OverrideKind
+	if err := s.append(plan); err != nil {
+		return err
+	}
+	a.syncSession(true)
+	return nil
+}
+
+func (s *session) moveFailure(plan record) string {
+	outcome := s.outcomes[plan.Index]
+	switch {
+	case outcome.Type == "single-error" || outcome.Type == "single-failed" ||
+		outcome.Type == "result" && (strings.Contains(outcome.Note, "Rename failed:") || plan.Move != nil && outcome.Move == nil && !s.excluded[plan.Index]):
+		if outcome.Note != "" {
+			return outcome.Note
+		}
+		return outcome.Status
+	case plan.Decision == "Location kept" && plan.Note != "":
+		return plan.Note
+	default:
+		return ""
+	}
+}
+
+func (s *session) failedMoveCount() int {
+	count := 0
+	for _, plan := range s.plans {
+		if s.moveFailure(plan) != "" {
+			count++
+		}
+	}
+	return count
+}

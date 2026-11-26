@@ -5,7 +5,6 @@ import (
 	"errors"
 	"path/filepath"
 	"strconv"
-	"strings"
 )
 
 var bridgeResultFilters = []string{"all", "folders", "proposed_moves", "failed_moves", "kept_locations", "exact_duplicates", "verified_duplicates", "possible_duplicates", "errors"}
@@ -264,28 +263,3 @@ func (a *application) bridgeResults(cmd bridgeCommand) (bridgeResultPage, error)
 	return page, nil
 }
 
-func (s *session) moveFailure(plan record) string {
-	outcome := s.outcomes[plan.Index]
-	switch {
-	case outcome.Type == "single-error" || outcome.Type == "single-failed" ||
-		outcome.Type == "result" && (strings.Contains(outcome.Note, "Rename failed:") || plan.Move != nil && outcome.Move == nil && !s.excluded[plan.Index]):
-		if outcome.Note != "" {
-			return outcome.Note
-		}
-		return outcome.Status
-	case plan.Decision == "Location kept" && plan.Note != "":
-		return plan.Note
-	default:
-		return ""
-	}
-}
-
-func (s *session) failedMoveCount() int {
-	count := 0
-	for _, plan := range s.plans {
-		if s.moveFailure(plan) != "" {
-			count++
-		}
-	}
-	return count
-}

@@ -384,16 +384,7 @@ func (s *session) accept(r record) {
 	case "scan-mode":
 		s.partial = r.Partial
 	case "image-refinement", "plan-revision":
-		if r.Type == "image-refinement" {
-			delete(s.autoCompleted, r.Index)
-		}
-		s.countFileAssessment(s.plans[r.Index], -1)
-		s.countFileAssessment(r, 1)
-		s.plans[r.Index] = r
-		delete(s.outcomes, r.Index)
-		s.planRevision++
-		s.planVersions[r.Index] = s.planRevision
-		s.reindexPlans()
+		s.acceptPlanRevision(r)
 	case "plan":
 		s.countFileAssessment(r, 1)
 		s.plans = append(s.plans, r)
@@ -401,84 +392,21 @@ func (s *session) accept(r record) {
 		s.planVersions = append(s.planVersions, s.planRevision)
 		s.indexPlan(r)
 	case "apply-selection":
-		for _, override := range r.MoveOverrides {
-			plan := &s.plans[override.Index]
-			move := override.Move
-			plan.Move = &move
-			plan.Reason = "The operator approved a different destination folder"
-			s.planRevision++
-			s.planVersions[override.Index] = s.planRevision
-		}
-		if len(r.MoveOverrides) != 0 {
-			s.reindexPlans()
-		}
-		s.selection = append([]int(nil), r.Selection...)
+		s.acceptApplySelection(r)
 	case "selection-done":
 		s.selection = s.selection[1:]
 	case "selected-metadata":
 		s.metadataPlans = append(s.metadataPlans, s.plans[r.Index])
 	case "approved", "apply-batch":
-		s.planRevision++
-		end := r.Index
-		if r.Type == "approved" { // Releases 2.0 and 2.1 saved a single full-run approval.
-			end = len(s.plans)
-		}
-		for _, i := range r.Excluded {
-			s.excluded[i] = true
-		}
-		for _, plan := range s.plans[s.applyThrough:end] {
-			if plan.Metadata != nil && !s.excluded[plan.Index] {
-				s.metadataPlans = append(s.metadataPlans, plan)
-			}
-		}
-		s.applyThrough = end
+		s.acceptBatchApproval(r)
 	case "advance":
 		s.index = r.Index + 1
 	case "intent", "undo-intent", "single-intent", "metadata-intent", "metadata-undo-intent", "recycle-intent":
 		s.pending = &r
 	case "exact-batch-approved":
-		if s.exactBatches == nil {
-			s.exactBatches = make(map[string]*exactRecycleBatch)
-			s.batchRecycled = make(map[string]map[int]bool)
-		}
-		r.ExactBatch.approvedCopies = make(map[int]bool)
-		for _, group := range r.ExactBatch.Groups {
-			for _, index := range group.Indices {
-				r.ExactBatch.approvedCopies[index] = true
-			}
-		}
-		s.exactBatches[r.ExactBatch.ID] = r.ExactBatch
-		s.batchRecycled[r.ExactBatch.ID] = make(map[int]bool)
+		s.acceptExactBatchApproval(r)
 	case "recycle-result":
-		batchID := s.pending.BatchID
-		s.pending = nil
-		s.planRevision++
-		s.planVersions[r.Index] = s.planRevision
-		if r.Status == "present" {
-			if s.recycleErrors == nil {
-				s.recycleErrors = make(map[int]bool)
-			}
-			s.recycleErrors[r.Index] = true
-		}
-		if r.Status == "absent" {
-			delete(s.recycleErrors, r.Index)
-			if batchID != "" {
-				s.batchRecycled[batchID][r.Index] = true
-			}
-			s.recycled++
-			plan := s.plans[r.Index]
-			s.countFileAssessment(plan, -1)
-			plan.Move, plan.Metadata = nil, nil
-			plan.Digest, plan.TextDigest = "", ""
-			plan.Note, plan.Decision, plan.Reason = "", removedFlaggedFile, "The file is no longer in the scanned folder after a Recycle Bin request"
-			plan.Auto, plan.AutoValidated, plan.Unknown = false, false, false
-			s.countFileAssessment(plan, 1)
-			s.plans[r.Index] = plan
-			delete(s.outcomes, r.Index)
-			if s.manifest.Operation != scanDuplicates {
-				s.reindexPlans()
-			}
-		}
+		s.acceptRecycleResult(r)
 	case "plan-auto-blocked":
 		s.pending = nil
 		s.flags = append(s.flags, r)
@@ -491,49 +419,7 @@ func (s *session) accept(r record) {
 			s.pending = nil
 		}
 	case "result":
-		if r.Move != nil && s.automaticMoves != nil && r.Auto && s.pending != nil && s.pending.Type == "intent" {
-			reason := "Matched the automatic naming rules"
-			if r.Index < len(s.plans) && s.plans[r.Index].Reason != "" {
-				reason = s.plans[r.Index].Reason
-			}
-			s.automaticMoves[r.Index] = indexedMove{move: *r.Move, position: len(s.moves), reason: reason}
-		}
-		s.planRevision++
-		if r.Index < len(s.planVersions) {
-			s.planVersions[r.Index] = s.planRevision
-		}
-		s.pending = nil
-		if r.Auto {
-			s.autoCompleted[r.Index] = true
-		} else if r.Index >= s.index {
-			s.index = r.Index + 1
-		}
-		if r.Index >= 0 && r.Index < len(s.plans) && s.plans[r.Index].Note != "" {
-			s.resolvedPlanFlags++
-		}
-		switch r.Status {
-		case "renamed":
-			s.renamed++
-		case "moved":
-			s.renamed++
-			s.moved++
-		case "kept":
-			s.kept++
-		case "skipped":
-			s.skipped++
-		}
-		if r.Note != "" {
-			s.flags = append(s.flags, r)
-		}
-		if r.Move != nil {
-			im := indexedMove{move: *r.Move, position: len(s.moves)}
-			s.byItem[r.Index] = im
-			s.moveIndexByTarget[r.Move.To] = r.Index
-			if r.Move.Stamp.Dir {
-				s.folderByPath[r.Move.From] = im
-			}
-			s.moves = append(s.moves, *r.Move)
-		}
+		s.acceptRenameResult(r)
 	case "metadata-result":
 		s.pending = nil
 		s.metadataIndex++
@@ -555,6 +441,145 @@ func (s *session) accept(r record) {
 		s.undoFailures++
 	}
 }
+
+func (s *session) acceptPlanRevision(r record) {
+	if r.Type == "image-refinement" {
+		delete(s.autoCompleted, r.Index)
+	}
+	s.countFileAssessment(s.plans[r.Index], -1)
+	s.countFileAssessment(r, 1)
+	s.plans[r.Index] = r
+	delete(s.outcomes, r.Index)
+	s.planRevision++
+	s.planVersions[r.Index] = s.planRevision
+	s.reindexPlans()
+}
+
+func (s *session) acceptApplySelection(r record) {
+	for _, override := range r.MoveOverrides {
+		plan := &s.plans[override.Index]
+		move := override.Move
+		plan.Move = &move
+		plan.Reason = "The operator approved a different destination folder"
+		s.planRevision++
+		s.planVersions[override.Index] = s.planRevision
+	}
+	if len(r.MoveOverrides) != 0 {
+		s.reindexPlans()
+	}
+	s.selection = append([]int(nil), r.Selection...)
+}
+
+func (s *session) acceptBatchApproval(r record) {
+	s.planRevision++
+	end := r.Index
+	if r.Type == "approved" { // Releases 2.0 and 2.1 saved a single full-run approval.
+		end = len(s.plans)
+	}
+	for _, i := range r.Excluded {
+		s.excluded[i] = true
+	}
+	for _, plan := range s.plans[s.applyThrough:end] {
+		if plan.Metadata != nil && !s.excluded[plan.Index] {
+			s.metadataPlans = append(s.metadataPlans, plan)
+		}
+	}
+	s.applyThrough = end
+}
+
+func (s *session) acceptExactBatchApproval(r record) {
+	if s.exactBatches == nil {
+		s.exactBatches = make(map[string]*exactRecycleBatch)
+		s.batchRecycled = make(map[string]map[int]bool)
+	}
+	r.ExactBatch.approvedCopies = make(map[int]bool)
+	for _, group := range r.ExactBatch.Groups {
+		for _, index := range group.Indices {
+			r.ExactBatch.approvedCopies[index] = true
+		}
+	}
+	s.exactBatches[r.ExactBatch.ID] = r.ExactBatch
+	s.batchRecycled[r.ExactBatch.ID] = make(map[int]bool)
+}
+
+func (s *session) acceptRecycleResult(r record) {
+	batchID := s.pending.BatchID
+	s.pending = nil
+	s.planRevision++
+	s.planVersions[r.Index] = s.planRevision
+	if r.Status == "present" {
+		if s.recycleErrors == nil {
+			s.recycleErrors = make(map[int]bool)
+		}
+		s.recycleErrors[r.Index] = true
+	}
+	if r.Status == "absent" {
+		delete(s.recycleErrors, r.Index)
+		if batchID != "" {
+			s.batchRecycled[batchID][r.Index] = true
+		}
+		s.recycled++
+		plan := s.plans[r.Index]
+		s.countFileAssessment(plan, -1)
+		plan.Move, plan.Metadata = nil, nil
+		plan.Digest, plan.TextDigest = "", ""
+		plan.Note, plan.Decision, plan.Reason = "", removedFlaggedFile, "The file is no longer in the scanned folder after a Recycle Bin request"
+		plan.Auto, plan.AutoValidated, plan.Unknown = false, false, false
+		s.countFileAssessment(plan, 1)
+		s.plans[r.Index] = plan
+		delete(s.outcomes, r.Index)
+		if s.manifest.Operation != scanDuplicates {
+			s.reindexPlans()
+		}
+	}
+}
+
+func (s *session) acceptRenameResult(r record) {
+	if r.Move != nil && s.automaticMoves != nil && r.Auto && s.pending != nil && s.pending.Type == "intent" {
+		reason := "Matched the automatic naming rules"
+		if r.Index < len(s.plans) && s.plans[r.Index].Reason != "" {
+			reason = s.plans[r.Index].Reason
+		}
+		s.automaticMoves[r.Index] = indexedMove{move: *r.Move, position: len(s.moves), reason: reason}
+	}
+	s.planRevision++
+	if r.Index < len(s.planVersions) {
+		s.planVersions[r.Index] = s.planRevision
+	}
+	s.pending = nil
+	if r.Auto {
+		s.autoCompleted[r.Index] = true
+	} else if r.Index >= s.index {
+		s.index = r.Index + 1
+	}
+	if r.Index >= 0 && r.Index < len(s.plans) && s.plans[r.Index].Note != "" {
+		s.resolvedPlanFlags++
+	}
+	switch r.Status {
+	case "renamed":
+		s.renamed++
+	case "moved":
+		s.renamed++
+		s.moved++
+	case "kept":
+		s.kept++
+	case "skipped":
+		s.skipped++
+	}
+	if r.Note != "" {
+		s.flags = append(s.flags, r)
+	}
+	if r.Move != nil {
+		im := indexedMove{move: *r.Move, position: len(s.moves)}
+		s.byItem[r.Index] = im
+		s.moveIndexByTarget[r.Move.To] = r.Index
+		if r.Move.Stamp.Dir {
+			s.folderByPath[r.Move.From] = im
+		}
+		s.moves = append(s.moves, *r.Move)
+	}
+}
+
 func (s *session) namingRules() namingRules { return s.settings().Naming }
 
 func (s *session) indexPlan(r record) {

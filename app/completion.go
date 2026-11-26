@@ -1,12 +1,7 @@
 package main
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -68,38 +63,6 @@ func (s *session) receipt() completionReceipt {
 	r.Metadata.Failed = s.metadataIndex - len(s.repaired)
 	r.Metadata.Pending += len(s.metadataPlans) - s.metadataIndex
 	return r
-}
-
-type contextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r contextReader) Read(buf []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.r.Read(buf)
-}
-func comparisonHash(ctx context.Context, path string) (string, error) {
-	st, err := fingerprint(path)
-	if err != nil || st.Dir {
-		return "", errors.New("Cannot record identity for comparison")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err = io.Copy(h, contextReader{ctx, f}); err != nil {
-		return "", err
-	}
-	end, err := fingerprint(path)
-	if err != nil || st != end {
-		return "", errors.New("File changed while recording its comparison identity")
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 type runDelta struct {
@@ -188,22 +151,6 @@ func (a *application) compareRuns(first, second string, offset int, showNames bo
 		result.NextOffset = offset + len(result.Rows)
 	}
 	return result, nil
-}
-
-func (s *session) metadataApproved(index int) bool {
-	for _, plan := range s.metadataPlans {
-		if plan.Index == index {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *session) availableTypes() []string {
-	if s.manifest.Inventory != nil {
-		return s.manifest.Inventory.FileTypes
-	}
-	return nil
 }
 
 func (s *session) zeroChangeReason(busy bool, pending int) string {

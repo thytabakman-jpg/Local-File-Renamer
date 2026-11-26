@@ -47,6 +47,59 @@ func stoppedClock(clock scanClock, stopped time.Time, paused bool) scanClock {
 	return c
 }
 
+type batchReport struct {
+	Job                                         string
+	Phase                                       string
+	Revision                                    uint64
+	Total, Assessed, Drafts, Cached             int
+	Decisions, Classifications                  map[string]int
+	AI                                          map[string]int
+	ReadMS, OCRMS, StartupMS, ModelMS, RenameMS int64
+	PromptMS, GenerationMS                      int64
+	Clock                                       scanClock
+	AIContribution                              map[string]int
+	Receipt                                     completionReceipt
+}
+
+func (a *application) report(id string) (batchReport, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.s
+	if s == nil || id != "" && id != a.v.Job || a.v.Busy && !a.scanActive && a.v.Phase != "reassessing" {
+		return batchReport{}, errors.New("No matching live or saved batch report is available")
+	}
+	report := batchReport{
+		Job: a.v.Job, Phase: a.v.Phase, Revision: s.planRevision, Total: s.fileCount,
+		Drafts: len(a.cleanup) - a.cleanupThrough, Clock: a.v.Clock.at(time.Now()),
+		Decisions: make(map[string]int), Classifications: make(map[string]int), AI: make(map[string]int), AIContribution: make(map[string]int), Receipt: s.receipt(),
+	}
+	for _, plan := range s.plans[:min(s.fileCount, len(s.plans))] {
+		report.Assessed++
+		report.Decisions[planOutcome(plan)]++
+		if plan.Kind != "" {
+			report.Classifications[plan.Kind]++
+		}
+		check := plan.Inspection
+		if check.AI != "" {
+			report.AI[check.AI]++
+		}
+		if check.AIContribution != "" {
+			report.AIContribution[check.AIContribution]++
+		}
+		if check.Cache != "" {
+			report.Cached++
+		}
+		report.ReadMS += check.ReadMS
+		report.OCRMS += check.OCRMS
+		report.StartupMS += check.StartupMS
+		report.ModelMS += check.ModelMS
+		report.PromptMS += check.PromptMS
+		report.GenerationMS += check.GenerationMS
+		report.RenameMS += s.outcomes[plan.Index].RenameMS
+	}
+	return report, nil
+}
+
 type timingRow struct {
 	Path                     string
 	Status, Note             string

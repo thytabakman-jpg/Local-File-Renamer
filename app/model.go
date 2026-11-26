@@ -77,6 +77,28 @@ func modelReadyFor(dir, selection string) bool {
 	}
 	return true
 }
+func (a *application) download() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.v.Busy || a.v.Closing {
+		return errors.New("The app is busy or closing")
+	}
+	selection := a.activeSettings().AI.Model
+	if modelReadyFor(a.modelDir, selection) {
+		return nil
+	}
+	ctx := a.begin("download")
+	a.v.Downloaded = 0
+	go func() {
+		err := fetchModelsFor(ctx, a.modelDir, selection, func(n int64) { a.mu.Lock(); a.v.Downloaded = n; a.mu.Unlock() })
+		if errors.Is(err, context.Canceled) {
+			err = nil
+		}
+		a.finish(err)
+	}()
+	return nil
+}
+
 func fetchModels(ctx context.Context, dir string, progress func(int64)) error {
 	return fetchModelsFor(ctx, dir, "configured", progress)
 }
