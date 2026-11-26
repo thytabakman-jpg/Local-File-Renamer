@@ -454,3 +454,35 @@ func (a *application) patchProfile(revision uint64, name string, changes map[str
 	err = a.saveProfileLocked(revision, name, &settings, false)
 	return a.profiles.Revision, err
 }
+
+func (a *application) getRules() ruleSet {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return ruleSet{Revision: a.profiles.Revision, Rules: a.activeSettings().Naming, Formats: namingFormats}
+}
+
+func (a *application) updateRules(revision uint64, r namingRules) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	settings := a.activeSettings()
+	if r.Capitalization == "" {
+		r.Capitalization = settings.Naming.Capitalization
+	}
+	if r.Separator == "" {
+		r.Separator = settings.Naming.Separator
+	}
+	if r.MaxLength == 0 {
+		r.MaxLength = settings.Naming.MaxLength
+	}
+	if r.AuthorFormat == "" {
+		r.AuthorFormat = settings.Naming.AuthorFormat
+	}
+	if r.VersionFormat == "" {
+		r.VersionFormat = settings.Naming.VersionFormat
+	}
+	settings.Naming = r
+	if err := validateSettings(settings); err != nil {
+		return err
+	}
+	return a.saveProfileLocked(revision, a.profiles.Active, &settings, true)
+}

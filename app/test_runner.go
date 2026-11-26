@@ -627,3 +627,39 @@ func testRuleKeeper(s *session, members []duplicateMember, rule testKeeperRule) 
 	}
 	return ""
 }
+
+func (a *application) startTest(id string) (testReceipt, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.testMu.Lock()
+	defer a.testMu.Unlock()
+	if a.v.Closing || a.testActive.Job != "" {
+		return testReceipt{}, errors.New("The app is closing or a test is already running")
+	}
+	job, err := a.readTest(id)
+	if err != nil {
+		return testReceipt{}, err
+	}
+	if job.Status != "draft" {
+		job, err = a.saveNewTest(job.Plan, job.Settings)
+		if err != nil {
+			return testReceipt{}, err
+		}
+	}
+	job.Status, job.Headline = "running", "Preparing identical test inputs"
+	if err := a.writeTest(job); err != nil {
+		return testReceipt{}, err
+	}
+	a.testActive = job.testReceipt
+	a.testDone = make(chan struct{})
+	ctx, cancel := context.WithCancel(a.chat.lifetime)
+	a.testCancel = cancel
+	go a.runTest(ctx, job)
+	return job.testReceipt, nil
+}
+
+func (a *application) sendTestProgress(job savedTest) {
+	a.testMu.Lock()
+	defer a.testMu.Unlock()
+	a.testActive = job.testReceipt
+}

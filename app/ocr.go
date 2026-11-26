@@ -54,3 +54,34 @@ func tesseractPage(ctx context.Context, jpeg []byte) (string, error) {
 	}
 	return chars(string(data), excerpt), nil
 }
+
+func unresolvedPDF(s *session, opts scanSettings, path, name, override string, e evidence) bool {
+	if s.manifest.Operation == scanMove {
+		return !s.sortIndex.proposedLocation(path, e, assessment{}, false).Clear
+	}
+	d := decideWithRules(name, e, assessment{}, false, opts.Naming, override)
+	return d.Unknown || d.Note != "" || d.Name == name && d.Outcome != "Name verified"
+}
+
+func inspectOCR(ctx context.Context, s *session, transcribe transcribePage, opts scanSettings, item entry, name, override string, pre *preparedEvidence, e evidence) (evidence, string, int64, error) {
+	ocrStatus := pre.Cached.OCR
+	var ocrMS int64
+	var ocrErr error
+	if !pre.Reused && opts.Evidence.UseOCR && strings.EqualFold(extension(item.Path), ".pdf") && transcribe != nil && ctx.Err() == nil &&
+		(len(e.Text) < 35 || opts.Evidence.OCRUnresolved && unresolvedPDF(s, opts, item.Path, name, override, e)) {
+		ocrStart := time.Now()
+		extracted, note, err := scanOCRWithError(ctx, item.Path, transcribe, opts.Evidence.OCRPages)
+		ocrMS, ocrStatus, ocrErr = elapsedMS(ocrStart), note, err
+		if extracted != "" {
+			if len(e.Text) < 35 {
+				e.Text = chars(extracted, opts.Evidence.TextBytes)
+			} else if !strings.Contains(norm(e.Text), norm(extracted)) {
+				e.Text = chars(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+extracted, opts.Evidence.TextBytes)
+			}
+			e.Note, ocrStatus = "", "Read sampled pages"
+		} else {
+			e.Note = joinNote(e.Note, note)
+		}
+	}
+	return e, ocrStatus, ocrMS, ocrErr
+}

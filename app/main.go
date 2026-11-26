@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -699,4 +700,94 @@ func showError(err error) {
 		configureChild(c)
 		_ = c.Run()
 	}
+}
+
+func (a *application) registerTestRoutes(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool) {
+	mux.HandleFunc("GET /api/tests", func(w http.ResponseWriter, r *http.Request) {
+		if auth(w, r) {
+			reply(w, a.listTests())
+		}
+	})
+	mux.HandleFunc("GET /api/test-plan", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		job, err := a.readTest(r.URL.Query().Get("job"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		reply(w, job.Plan)
+	})
+	mux.HandleFunc("POST /api/test-plan", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		var request struct {
+			Plan  *testPlan `json:"plan"`
+			Job   string    `json:"job"`
+			Start bool      `json:"start"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
+		decoder.DisallowUnknownFields()
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") || decoder.Decode(&request) != nil ||
+			(request.Plan == nil) == (request.Job == "") || request.Job != "" && !request.Start {
+			http.Error(w, "Supply a test plan or an approved saved job ID", http.StatusBadRequest)
+			return
+		}
+		var receipt testReceipt
+		var err error
+		if request.Plan != nil {
+			var job savedTest
+			job, err = a.saveTestPlan(*request.Plan)
+			receipt = job.testReceipt
+		} else {
+			receipt.Job = request.Job
+		}
+		if err == nil && request.Start {
+			receipt, err = a.startTest(receipt.Job)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		reply(w, receipt)
+	})
+	mux.HandleFunc("POST /api/test-cancel", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		a.testMu.Lock()
+		defer a.testMu.Unlock()
+		if a.testCancel == nil || a.testActive.Job != r.URL.Query().Get("job") {
+			http.Error(w, "The test is no longer running", http.StatusConflict)
+			return
+		}
+		a.testCancel()
+		reply(w, a.testActive)
+	})
+	mux.HandleFunc("GET /api/test-report", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		id := r.URL.Query().Get("job")
+		receipt, err := a.testStatus(id)
+		if err == nil && receipt.Report == "" {
+			err = errors.New("The test report is not available yet")
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		job, err := a.readTest(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		job.testReceipt = receipt
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"Renamer-Test-%s.md\"", id))
+		_, _ = w.Write([]byte(renderTestReport(job, r.URL.Query().Get("full") == "1")))
+	})
 }

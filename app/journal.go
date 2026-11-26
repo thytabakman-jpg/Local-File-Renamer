@@ -746,103 +746,11 @@ func (s *session) validateMoveParents(m move) error {
 	return nil
 }
 
-func (s *session) reviewEnd() int {
-	if len(s.plans) == len(s.manifest.Items) {
-		return len(s.plans)
-	}
-	return min(len(s.plans), s.fileCount)
-}
-
-func (s *session) reviewable(plan record) bool {
-	return plan.Metadata != nil && !s.metadataApproved(plan.Index) || plan.Move != nil && !s.autoCompleted[plan.Index]
-}
-
-func (s *session) reviewCount() int {
-	count := 0
-	for i := s.applyThrough; i < s.reviewEnd(); i++ {
-		if s.reviewable(s.plans[i]) {
-			count++
-		}
-	}
-	return count
-}
-
-func (s *session) applyPending() bool {
-	return len(s.selection) > 0 || s.index < s.applyThrough || s.metadataIndex < len(s.metadataPlans)
-}
-
-func (s *session) automaticRenamePending() bool {
-	if n := len(s.plans); s.manifest.Auto && n > 0 {
-		plan := s.plans[n-1]
-		return s.canAutoApply(plan)
-	}
-	return false
-}
-
-func (s *session) autoApply(plan record) error {
-	if s.canAutoApply(plan) {
-		return s.renamePlan(plan, automaticRename)
-	}
-	return nil
-}
-
-func (s *session) liveFlags() []record {
-	rows := make([]record, 0, 100)
-	for i := len(s.planFlags) - 1; i >= 0 && len(rows) < 100; i-- {
-		plan := s.planFlags[i]
-		if plan.Index >= s.index && !s.autoCompleted[plan.Index] {
-			rows = append(rows, plan)
-		}
-	}
-	return rows
-}
-
-func (s *session) flagRows() []record {
-	resolved := s.index
-	flags := append([]record(nil), s.flags...)
-	for _, r := range s.planFlags {
-		if r.Index >= resolved && !s.autoCompleted[r.Index] {
-			flags = append(flags, r)
-		}
-	}
-	return flags
-}
-
 func (s *session) availableForPlan(from, to string) error {
 	if s.proposedTargets[strings.ToLower(to)] {
 		return fmt.Errorf("Proposed name conflict: %s", filepath.Base(to))
 	}
 	return nameAvailable(from, to)
-}
-
-func (s *session) applyNext() error {
-	if !s.manifest.Preview || s.index >= s.applyThrough {
-		return errors.New("There are no approved proposals left to apply")
-	}
-	plan := s.plans[s.index]
-	if s.autoCompleted[plan.Index] || plan.Decision == removedFlaggedFile {
-		return s.append(record{Type: "advance", Index: plan.Index})
-	}
-	if plan.Move != nil && !s.excluded[plan.Index] {
-		if plan.Move.Stamp.Dir && s.folderHasUnappliedChild(plan.Path) {
-			return s.result(plan.Index, plan.Path, "kept", joinNote(plan.Note, "Folder name needs a fresh scan after a child rename was skipped"))
-		}
-		return s.renamePlan(plan, batchRename)
-	}
-	status := "kept"
-	if s.manifest.Items[plan.Index].Skip {
-		status = "skipped"
-	}
-	return s.result(plan.Index, plan.Path, status, plan.Note)
-}
-
-func (s *session) folderHasUnappliedChild(path string) bool {
-	for _, child := range s.plansByParent[path] {
-		if _, applied := s.byItem[child.Index]; !applied {
-			return true
-		}
-	}
-	return false
 }
 
 func nameAvailable(from, to string) error {
@@ -987,9 +895,4 @@ func joinNote(a, b string) string {
 		return a
 	}
 	return a + "; " + b
-}
-
-func (s *session) canRefine(index int) bool {
-	return index >= s.applyThrough && index >= 0 && index < len(s.plans) && s.plans[index].Rough &&
-		s.autoCompleted[index] && s.byItem[index].move.To != "" && s.undoCount == 0
 }

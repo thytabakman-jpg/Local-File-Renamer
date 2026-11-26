@@ -238,25 +238,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		pre = &p
 	}
 	cached, reused, e, readMS := pre.Cached, pre.Reused, pre.Evidence, pre.ReadMS
-	ocrStatus := cached.OCR
-	var ocrMS int64
-	var ocrErr error
-	if !reused && opts.Evidence.UseOCR && strings.EqualFold(extension(item.Path), ".pdf") && transcribe != nil && ctx.Err() == nil &&
-		(len(e.Text) < 35 || opts.Evidence.OCRUnresolved && unresolvedPDF(s, opts, item.Path, name, override, e)) {
-		ocrStart := time.Now()
-		extracted, note, err := scanOCRWithError(ctx, item.Path, transcribe, opts.Evidence.OCRPages)
-		ocrMS, ocrStatus, ocrErr = elapsedMS(ocrStart), note, err
-		if extracted != "" {
-			if len(e.Text) < 35 {
-				e.Text = chars(extracted, opts.Evidence.TextBytes)
-			} else if !strings.Contains(norm(e.Text), norm(extracted)) {
-				e.Text = chars(chars(e.Text, opts.Evidence.TextBytes/2)+"\n"+extracted, opts.Evidence.TextBytes)
-			}
-			e.Note, ocrStatus = "", "Read sampled pages"
-		} else {
-			e.Note = joinNote(e.Note, note)
-		}
-	}
+	e, ocrStatus, ocrMS, ocrErr := inspectOCR(ctx, s, transcribe, opts, item, name, override, pre, e)
 
 	if s.manifest.Operation == scanMove {
 		return inspectLocation(ctx, s, assess, opts, item.Path, name, cacheName, *pre, e, ocrStatus, ocrMS, ocrErr, refresh), st, ctx.Err()
@@ -432,14 +414,6 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		d.Note = joinNote(d.Note, s.compareVersionCopies(i, d.Name))
 	}
 	return d, st, ctx.Err()
-}
-
-func unresolvedPDF(s *session, opts scanSettings, path, name, override string, e evidence) bool {
-	if s.manifest.Operation == scanMove {
-		return !s.sortIndex.proposedLocation(path, e, assessment{}, false).Clear
-	}
-	d := decideWithRules(name, e, assessment{}, false, opts.Naming, override)
-	return d.Unknown || d.Note != "" || d.Name == name && d.Outcome != "Name verified"
 }
 
 func folderDecision(ctx context.Context, path string, assess assessFile, s *session) decision {

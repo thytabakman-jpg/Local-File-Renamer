@@ -58,8 +58,3 @@ func evidenceBenefit(before, after decision) string {
 		return "No useful change"
 	}
 }
-
-func (s *session) canAutoApply(plan record) bool {
-	return s.manifest.Auto && plan.Auto && plan.AutoValidated && !s.autoCompleted[plan.Index] && !s.autoHeld[plan.Index] &&
-		(s.manifest.Settings == nil || slices.Contains(s.settings().Execution.AutoKinds, plan.Kind))
-}

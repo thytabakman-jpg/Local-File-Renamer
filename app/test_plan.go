@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -309,38 +308,26 @@ func (a *application) testStatus(id string) (testReceipt, error) {
 	return job.testReceipt, err
 }
 
-func (a *application) startTest(id string) (testReceipt, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.testMu.Lock()
-	defer a.testMu.Unlock()
-	if a.v.Closing || a.testActive.Job != "" {
-		return testReceipt{}, errors.New("The app is closing or a test is already running")
-	}
-	job, err := a.readTest(id)
-	if err != nil {
-		return testReceipt{}, err
-	}
-	if job.Status != "draft" {
-		job, err = a.saveNewTest(job.Plan, job.Settings)
-		if err != nil {
-			return testReceipt{}, err
-		}
-	}
-	job.Status, job.Headline = "running", "Preparing identical test inputs"
-	if err := a.writeTest(job); err != nil {
-		return testReceipt{}, err
-	}
-	a.testActive = job.testReceipt
-	a.testDone = make(chan struct{})
-	ctx, cancel := context.WithCancel(a.chat.lifetime)
-	a.testCancel = cancel
-	go a.runTest(ctx, job)
-	return job.testReceipt, nil
+type testHistoryRow struct {
+	testReceipt
+	Name string `json:"name"`
 }
 
-func (a *application) sendTestProgress(job savedTest) {
-	a.testMu.Lock()
-	defer a.testMu.Unlock()
-	a.testActive = job.testReceipt
+func (a *application) listTests() []testHistoryRow {
+	rows := make([]testHistoryRow, 0)
+	dirs, _ := os.ReadDir(filepath.Join(a.home, "tests"))
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if !dirs[i].IsDir() {
+			continue
+		}
+		job, err := a.readTest(dirs[i].Name())
+		if err != nil {
+			continue
+		}
+		receipt, err := a.testStatus(job.Job)
+		if err == nil {
+			rows = append(rows, testHistoryRow{receipt, job.Plan.Name})
+		}
+	}
+	return rows
 }
