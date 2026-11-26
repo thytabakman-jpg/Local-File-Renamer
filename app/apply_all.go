@@ -278,3 +278,51 @@ func (a *application) applyChosenNames(id string, names []chosenName) error {
 	return a.applySelectionLocked(id, a.v.Revision, indices, nil)
 }
 
+func (s *session) applyPending() bool {
+	return len(s.selection) > 0 || s.index < s.applyThrough || s.metadataIndex < len(s.metadataPlans)
+}
+
+func (s *session) automaticRenamePending() bool {
+	if n := len(s.plans); s.manifest.Auto && n > 0 {
+		plan := s.plans[n-1]
+		return s.canAutoApply(plan)
+	}
+	return false
+}
+
+func (s *session) autoApply(plan record) error {
+	if s.canAutoApply(plan) {
+		return s.renamePlan(plan, automaticRename)
+	}
+	return nil
+}
+
+func (s *session) applyNext() error {
+	if !s.manifest.Preview || s.index >= s.applyThrough {
+		return errors.New("There are no approved proposals left to apply")
+	}
+	plan := s.plans[s.index]
+	if s.autoCompleted[plan.Index] || plan.Decision == removedFlaggedFile {
+		return s.append(record{Type: "advance", Index: plan.Index})
+	}
+	if plan.Move != nil && !s.excluded[plan.Index] {
+		if plan.Move.Stamp.Dir && s.folderHasUnappliedChild(plan.Path) {
+			return s.result(plan.Index, plan.Path, "kept", joinNote(plan.Note, "Folder name needs a fresh scan after a child rename was skipped"))
+		}
+		return s.renamePlan(plan, batchRename)
+	}
+	status := "kept"
+	if s.manifest.Items[plan.Index].Skip {
+		status = "skipped"
+	}
+	return s.result(plan.Index, plan.Path, status, plan.Note)
+}
+
+func (s *session) folderHasUnappliedChild(path string) bool {
+	for _, child := range s.plansByParent[path] {
+		if _, applied := s.byItem[child.Index]; !applied {
+			return true
+		}
+	}
+	return false
+}

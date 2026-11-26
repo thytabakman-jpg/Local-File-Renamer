@@ -422,6 +422,33 @@ func (a *application) registerScanResultRoutes(mux *http.ServeMux, auth func(htt
 	})
 }
 
+type actionRequest struct {
+	Action, Root, ID                     string
+	Operation                            scanOperation
+	Partial, Folders, Auto, Repair, Sort bool
+	Start, End, Index                    int
+	Enabled                              bool
+	Excluded, Indices                    []int
+	IncludeExtensions                    []string
+	ScopeMode, RequestID                 string
+	Subfolders                           *bool
+	Fresh                                bool
+	Revision                             *uint64
+	Keep                                 *int
+	DuplicateGroups, VerifiedGroups      []duplicateSelection
+	ChosenNames                          []chosenName
+	Count                                int
+	RowRevisions                         map[int]uint64
+	Rules                                *namingRules
+	Filename                             *string
+	Classification, Group, Value         string
+	Refresh                              bool
+	Profile                              string
+	Settings                             *scanSettings
+	Activate, PreviewOnly                bool
+	MediaSamples                         *bool
+}
+
 func (a *application) registerActionRoute(mux *http.ServeMux, auth func(http.ResponseWriter, *http.Request) bool, srv *http.Server) {
 	mux.HandleFunc("POST /api/action", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
@@ -432,32 +459,7 @@ func (a *application) registerActionRoute(mux *http.ServeMux, auth func(http.Res
 			return
 		}
 		body := http.MaxBytesReader(w, r.Body, 2<<20)
-		var q struct {
-			Action, Root, ID                     string
-			Operation                            scanOperation
-			Partial, Folders, Auto, Repair, Sort bool
-			Start, End, Index                    int
-			Enabled                              bool
-			Excluded, Indices                    []int
-			IncludeExtensions                    []string
-			ScopeMode, RequestID                 string
-			Subfolders                           *bool
-			Fresh                                bool
-			Revision                             *uint64
-			Keep                                 *int
-			DuplicateGroups, VerifiedGroups      []duplicateSelection
-			ChosenNames                          []chosenName
-			Count                                int
-			RowRevisions                         map[int]uint64
-			Rules                                *namingRules
-			Filename                             *string
-			Classification, Group, Value         string
-			Refresh                              bool
-			Profile                              string
-			Settings                             *scanSettings
-			Activate, PreviewOnly                bool
-			MediaSamples                         *bool
-		}
+		var q actionRequest
 		if err := json.NewDecoder(body).Decode(&q); err != nil {
 			http.Error(w, "Invalid action", 400)
 			return
@@ -557,43 +559,11 @@ func (a *application) registerActionRoute(mux *http.ServeMux, auth func(http.Res
 		case "apply-one":
 			err = a.applyOneRevision(q.ID, q.Index, q.Revision)
 		case "recycle-duplicates", "recycle-duplicate-groups", "recycle-verified-duplicates", "recycle-all-recommendations":
-			if !recycleAvailable {
-				err = fmt.Errorf("The Windows Recycle Bin is unavailable")
-				break
-			}
-			if q.Revision == nil {
-				err = fmt.Errorf("Confirm copies from the current duplicate scan")
-				break
-			}
-			if q.Action == "recycle-duplicates" {
-				if q.Keep == nil {
-					err = fmt.Errorf("Choose a file to keep")
-					break
-				}
-				count, recycleErr := a.recycleMatchedCopies(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices, recycleFile)
-				if recycleErr != nil {
-					err = fmt.Errorf("%d recycled. %w", count, recycleErr)
-					break
-				}
-				reply(w, map[string]int{"recycled": count})
+			var handled bool
+			handled, err = a.recycleAction(w, r, q)
+			if handled {
 				return
 			}
-			var receipt duplicateRecycleReceipt
-			var recycleErr error
-			if q.Action == "recycle-all-recommendations" {
-				receipt, recycleErr = a.recycleAllRecommendations(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.VerifiedGroups, recycleFile)
-			} else {
-				receipt, recycleErr = a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
-			}
-			message := ""
-			if recycleErr != nil {
-				message = recycleErr.Error()
-			}
-			reply(w, struct {
-				duplicateRecycleReceipt
-				Error string
-			}{receipt, message})
-			return
 		case "recycle-file":
 			if q.Revision == nil || len(q.Indices) != 1 {
 				err = fmt.Errorf("Confirm one file from the current review")
@@ -613,25 +583,7 @@ func (a *application) registerActionRoute(mux *http.ServeMux, auth func(http.Res
 		case "open-data":
 			err = openURL(a.home)
 		case "exit":
-			work, picker := a.requestClose()
-			a.testMu.Lock()
-			testDone := a.testDone
-			a.testMu.Unlock()
-			const accepted = "{\"ok\":true}\n"
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.Header().Set("Content-Length", strconv.Itoa(len(accepted)))
-			_, _ = io.WriteString(w, accepted)
-			_ = http.NewResponseController(w).Flush()
-			go func() {
-				for _, done := range []<-chan struct{}{work, picker, testDone} {
-					if done != nil {
-						<-done
-					}
-				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = srv.Shutdown(ctx)
-			}()
+			a.closeAction(w, srv)
 			return
 		default:
 			err = fmt.Errorf("Unknown action")
@@ -642,6 +594,69 @@ func (a *application) registerActionRoute(mux *http.ServeMux, auth func(http.Res
 		}
 		reply(w, map[string]bool{"ok": true})
 	})
+}
+
+func (a *application) recycleAction(w http.ResponseWriter, r *http.Request, q actionRequest) (bool, error) {
+	var err error
+	if !recycleAvailable {
+		err = fmt.Errorf("The Windows Recycle Bin is unavailable")
+		return false, err
+	}
+	if q.Revision == nil {
+		err = fmt.Errorf("Confirm copies from the current duplicate scan")
+		return false, err
+	}
+	if q.Action == "recycle-duplicates" {
+		if q.Keep == nil {
+			err = fmt.Errorf("Choose a file to keep")
+			return false, err
+		}
+		count, recycleErr := a.recycleMatchedCopies(r.Context(), q.ID, *q.Revision, *q.Keep, q.Indices, recycleFile)
+		if recycleErr != nil {
+			err = fmt.Errorf("%d recycled. %w", count, recycleErr)
+			return false, err
+		}
+		reply(w, map[string]int{"recycled": count})
+		return true, nil
+	}
+	var receipt duplicateRecycleReceipt
+	var recycleErr error
+	if q.Action == "recycle-all-recommendations" {
+		receipt, recycleErr = a.recycleAllRecommendations(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.VerifiedGroups, recycleFile)
+	} else {
+		receipt, recycleErr = a.recycleApprovedCopies(r.Context(), q.ID, *q.Revision, q.DuplicateGroups, q.Action == "recycle-verified-duplicates", recycleFile)
+	}
+	message := ""
+	if recycleErr != nil {
+		message = recycleErr.Error()
+	}
+	reply(w, struct {
+		duplicateRecycleReceipt
+		Error string
+	}{receipt, message})
+	return true, nil
+}
+
+func (a *application) closeAction(w http.ResponseWriter, srv *http.Server) {
+	work, picker := a.requestClose()
+	a.testMu.Lock()
+	testDone := a.testDone
+	a.testMu.Unlock()
+	const accepted = "{\"ok\":true}\n"
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(accepted)))
+	_, _ = io.WriteString(w, accepted)
+	_ = http.NewResponseController(w).Flush()
+	go func() {
+		for _, done := range []<-chan struct{}{work, picker, testDone} {
+			if done != nil {
+				<-done
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
 }
 
 func reply(w http.ResponseWriter, v any) {
