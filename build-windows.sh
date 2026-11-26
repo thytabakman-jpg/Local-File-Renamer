@@ -46,12 +46,12 @@ with zipfile.ZipFile(archive) as upstream, zipfile.ZipFile("installer/payload.zi
     for path in sorted(Path("licenses").iterdir()):
         setup.write(path, path.as_posix())
 PY
-go build -buildvcs=false -trimpath -ldflags '-s -w -H windowsgui' -o build/LocalFileRenamer-Setup-3.6.exe ./installer
+go build -buildvcs=false -trimpath -ldflags '-s -w -H windowsgui' -o build/LocalFileRenamer-Setup-4.0.exe ./installer
 python3 - <<'PYZIP'
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-setup = Path("build/LocalFileRenamer-Setup-3.6.exe")
-with ZipFile("build/LocalFileRenamer-Installer-3.6.zip", "w", ZIP_DEFLATED) as archive:
+setup = Path("build/LocalFileRenamer-Setup-4.0.exe")
+with ZipFile("build/LocalFileRenamer-Installer-4.0.zip", "w", ZIP_DEFLATED) as archive:
     archive.write(setup, setup.name)
 PYZIP

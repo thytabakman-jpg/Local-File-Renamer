@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// Evidence format version is independent of the application release.
 const evidenceVersion = "3.6.0"
 const assessmentVersion = "2.8.0-llama-b12588"
 

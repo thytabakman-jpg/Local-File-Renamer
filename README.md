@@ -1,4 +1,6 @@
-# Local File Renamer 3.6
+# Local File Renamer 4.0
+
+Version 4.0 reorganises scan setup, review and reporting, file-move planning, and HTTP route registration without intentionally changing existing behaviour or interfaces.
 
 Local File Renamer for Windows x64 proposes filename changes and file moves, and checks for duplicates. Setup installs for the current user and adds a Start menu shortcut. The launcher opens the app at `http://127.0.0.1:39173/`.
 
@@ -61,7 +63,7 @@ The runner snapshots the selected inputs once and uses the same bytes for each v
 
 Work Mode can call `renamer_test_start` with an approved saved test job or a user-approved structured test plan, and `renamer_test_status` with its job ID. Each call returns a compact receipt. Use History to download the Markdown report. The shareable version includes relative filenames and structured evidence. The full local report includes the root and free-text diagnostic details.
 
-For a 3.5-to-3.6 PDF comparison, first save a complete preview Rename scan in 3.5 with **Record file hashes for a controlled comparison** enabled in Settings. In 3.6, use that scan ID as a Rename variant’s `baseline_job`. The runner checks its relative paths and hashes against the frozen input. Then vary PDF extraction, online citation verification, or OCR while holding the model fixed. A conditional variant can assess unresolved files with Qwen3.5-9B if installed. **PDF OCR engine** can use the local vision model or Tesseract installed on the app’s PATH. Models download through Settings and dedicated OCR does not require a chat model.
+For a historical 3.5-to-3.6 PDF comparison, first save a complete preview Rename scan in 3.5 with **Record file hashes for a controlled comparison** enabled in Settings. In 3.6 or a compatible later version, use that scan ID as a Rename variant’s `baseline_job`. The runner checks its relative paths and hashes against the frozen input. Then vary PDF extraction, online citation verification, or OCR while holding the model fixed. A conditional variant can assess unresolved files with Qwen3.5-9B if installed. **PDF OCR engine** can use the local vision model or Tesseract installed on the app’s PATH. Models download through Settings and dedicated OCR does not require a chat model.
 
 ## Apply all
 
@@ -110,4 +112,4 @@ The connection can start and pause scans, read proposed changes and reports, man
 
 The MIT-licensed source includes `build-windows.sh`. It requires Go 1.27.4, Python 3, a POSIX shell, and the pinned [llama.cpp b12588](https://github.com/ggml-org/llama.cpp/releases/tag/b12588) CPU archive. Set `LLAMA_CPU_ZIP` to reuse a verified copy of the archive. Setup can offer Microsoft's signed Visual C++ runtime if it is missing.
 
-The application source and embedded browser interface are in `app/`. The Windows setup program is in `installer/`, and third-party licence terms are in `licenses/`. Run `go test ./...` for the Linux tests or `go run ./app` to start the app on a supported platform. Run `./build-windows.sh` to create `build/LocalFileRenamer-Installer-3.6.zip`. The ZIP contains a single Setup executable. To try real inference, set `LOCAL_RENAMER_ENGINE` to the llama.cpp directory and `LOCAL_RENAMER_MODELS` to the model files directory. Go modules, the engine archive, and GGUF weights are obtained separately from their pinned sources.
+The application source and embedded browser interface are in `app/`. The Windows setup program is in `installer/`, and third-party licence terms are in `licenses/`. Run `go test ./...` for the Linux tests or `go run ./app` to start the app on a supported platform. Run `./build-windows.sh` to create `build/LocalFileRenamer-Installer-4.0.zip`. The ZIP contains a single Setup executable. To try real inference, set `LOCAL_RENAMER_ENGINE` to the llama.cpp directory and `LOCAL_RENAMER_MODELS` to the model files directory. Go modules, the engine archive, and GGUF weights are obtained separately from their pinned sources.

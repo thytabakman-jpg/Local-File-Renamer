@@ -6,7 +6,7 @@ import (
 )
 
 const appExe = "LocalFileRenamer.exe"
-const installVersion = "3.6"
+const installVersion = "4.0"
 
 // Each install gets its own program directory. Windows can keep an earlier
 // executable or engine DLL open without blocking an upgrade.
