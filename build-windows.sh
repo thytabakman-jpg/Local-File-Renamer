@@ -10,6 +10,7 @@ prepare_build() {
   exit 1
  fi
  work=
+ publishing=0
  trap cleanup 0
  trap 'exit 1' HUP INT TERM
  version=$(sed -n 's/^const Current = "\([^"]*\)"$/\1/p' internal/version/version.go)
@@ -18,8 +19,6 @@ prepare_build() {
  esac
  setup_name=LocalFileRenamer-Setup-$version.exe
  zip_name=LocalFileRenamer-Installer-$version.zip
- # A failed rebuild must not leave an earlier same-version package advertised.
- rm -f "build/$setup_name" "build/$zip_name"
  if [ "$(head -n 1 README.md)" != "# Local File Renamer $version" ]; then
   echo "README version does not match application version $version" >&2
   exit 1
@@ -28,9 +27,32 @@ prepare_build() {
 }
 
 cleanup() {
- if [ -n "$work" ]; then rm -rf "$work"; fi
- rm -f installer/payload.zip app/icon_windows_amd64.syso installer/icon_windows_amd64.syso
- rmdir "$lock"
+ result=$?
+ rollback_failed=0
+ trap - 0
+ set +e
+ if [ "$result" -ne 0 ]; then
+  if [ "$publishing" -eq 1 ]; then
+   for name in "$setup_name" "$zip_name"; do
+    if [ -f "$work/previous/$name" ]; then
+     mv -f "$work/previous/$name" "build/$name" || rollback_failed=1
+    else
+     rm -f "build/$name" || rollback_failed=1
+    fi
+   done
+  fi
+  if [ "$rollback_failed" -eq 1 ]; then
+   result=2
+   echo "Build failed; output rollback may be incomplete. Recovery files: $work" >&2
+   work=
+  else
+   echo "Build failed; existing distribution files were not replaced." >&2
+  fi
+ fi
+ if [ -n "$work" ]; then rm -rf "$work" || result=1; fi
+ rm -f installer/payload.zip app/icon_windows_amd64.syso installer/icon_windows_amd64.syso || result=1
+ rmdir "$lock" || result=1
+ exit "$result"
 }
 
 generate_icons() {
@@ -101,19 +123,31 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 setup, output = map(Path, sys.argv[1:])
-if setup.stat().st_size == 0:
-    raise SystemExit("Installer executable is empty.")
+import struct
+
+with setup.open("rb") as binary:
+    header = binary.read(64)
+    if len(header) != 64 or header[:2] != b"MZ":
+        raise SystemExit("Installer is not a Windows executable.")
+    binary.seek(struct.unpack_from("<I", header, 60)[0])
+    pe = binary.read(26)
+    if len(pe) != 26 or pe[:4] != b"PE\x00\x00" or struct.unpack_from("<H", pe, 4)[0] != 0x8664 or struct.unpack_from("<H", pe, 24)[0] != 0x20b:
+        raise SystemExit("Installer is not a Windows x64 executable.")
 with ZipFile(output, "w", ZIP_DEFLATED) as archive:
     archive.write(setup, setup.name)
 with ZipFile(output) as archive:
     if archive.namelist() != [setup.name] or archive.testzip() is not None:
         raise SystemExit("Installer ZIP verification failed.")
 PYZIP
- mv "$work/$setup_name" "build/$setup_name"
- if ! mv "$work/$zip_name" "build/$zip_name"; then
-  rm -f "build/$setup_name"
-  exit 1
- fi
+ mkdir "$work/previous"
+ for name in "$setup_name" "$zip_name"; do
+  if [ -f "build/$name" ]; then cp -p "build/$name" "$work/previous/$name"; fi
+ done
+ publishing=1
+ mv -f "$work/$setup_name" "build/$setup_name"
+ mv -f "$work/$zip_name" "build/$zip_name"
+ publishing=0
+ echo "Windows build verified and published: build/$zip_name"
 }
 
 prepare_build

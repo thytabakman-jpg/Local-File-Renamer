@@ -38,8 +38,8 @@ func main() {
 	if warn != nil {
 		dialog("The app is installed.\n\n"+warn.Error(), 0x30)
 	}
-	if oldVersionRunning() {
-		dialog("Version "+installVersion+" is installed. To open it, close the earlier Renamer using Close app in its browser window, then choose Local File Renamer from the Start menu.\n\nNew executable: "+app, 0x40)
+	if renamerRunning() {
+		dialog("Version "+installVersion+" is installed. To open it, close the running Renamer using Close app in its browser window, then choose Local File Renamer from the Start menu.\n\nNew executable: "+app, 0x40)
 		return
 	}
 	if dialog("Local File Renamer is installed. Open it now?", 0x44) == 6 {
@@ -77,7 +77,7 @@ func install() (string, error, error) {
 	return app, warn, nil
 }
 
-func oldVersionRunning() bool {
+func renamerRunning() bool {
 	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	probe, err := client.Get("http://127.0.0.1:39173/status")
@@ -87,7 +87,7 @@ func oldVersionRunning() bool {
 	defer probe.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(probe.Body, 128))
 	version := strings.TrimSpace(string(b))
-	return strings.HasPrefix(version, appName) && version != appName+" v"+installVersion
+	return probe.StatusCode == http.StatusOK && strings.HasPrefix(version, appName+" v")
 }
 
 func unpack(dir string) error {
@@ -96,8 +96,12 @@ func unpack(dir string) error {
 
 func child(name string, args ...string) *exec.Cmd {
 	c := exec.Command(name, args...)
-	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	hideWindow(c)
 	return c
+}
+
+func hideWindow(c *exec.Cmd) {
+	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 }
 func shortcut(exe string) error {
 	c := child("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `
@@ -114,25 +118,24 @@ $link.Save()
 }
 func ensureCRT(dir string) error {
 	exe := filepath.Join(dir, "engine", "llama-server.exe")
-	if engineStarts(exe) {
+	probe := probeEngine(exe, 15*time.Second, hideWindow)
+	if probe.err == nil {
 		return nil
 	}
-	if dialog("The local AI engine could not start. Install Microsoft's Visual C++ runtime now? Windows may ask for administrator permission.", 0x34) != 6 {
-		return errors.New("You can still choose Run without local AI. Microsoft’s Visual C++ x64 runtime is required for local AI on this PC.")
+	missing := missingMicrosoftRuntime(filepath.Dir(exe), probe)
+	if len(missing) == 0 {
+		return fmt.Errorf("local AI engine could not start; use Run without local AI if needed. %s", probe.diagnostic())
+	}
+	if dialog("The engine reports a missing DLL. Imported Microsoft runtime files not found in standard locations: "+strings.Join(missing, ", ")+". Install Microsoft's Visual C++ runtime now? Windows may ask for administrator permission.", 0x34) != 6 {
+		return errors.New("Microsoft runtime installation declined. Run without local AI is available.")
 	}
 	if err := installCRT(); err != nil {
 		return err
 	}
-	if !engineStarts(exe) {
-		return errors.New("Restart Windows and try Local AI. Run without local AI is also available.")
+	if retry := probeEngine(exe, 15*time.Second, hideWindow); retry.err != nil {
+		return fmt.Errorf("local AI engine still could not start after runtime setup: %s. Restart Windows or use Run without local AI.", retry.diagnostic())
 	}
 	return nil
-}
-
-func engineStarts(exe string) bool {
-	c := child(exe, "--version")
-	c.Dir = filepath.Dir(exe)
-	return c.Run() == nil
 }
 
 func installCRT() error {

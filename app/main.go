@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"localrenamer/internal/mcplaunch"
 )
 
 //go:embed ui/*
@@ -61,11 +63,11 @@ func main() {
 			b, _ := io.ReadAll(io.LimitReader(res.Body, 100))
 			res.Body.Close()
 			running := strings.TrimSpace(string(b))
-			if running == "Local File Renamer v"+appVersion {
+			if res.StatusCode == http.StatusOK && running == "Local File Renamer v"+appVersion && res.Header.Get(mcplaunch.InstallationHeader) == mcplaunch.InstallationID(exe) {
 				_ = openURL("http://127.0.0.1:39173/")
 				return
 			}
-			if strings.HasPrefix(running, "Local File Renamer v") {
+			if res.StatusCode == http.StatusOK && strings.HasPrefix(running, "Local File Renamer v") {
 				showError(fmt.Errorf("%s is still running. Use Close app in its browser window at http://127.0.0.1:39173/, then reopen Local File Renamer from the Start menu", running))
 				return
 			}
@@ -101,7 +103,13 @@ func server(a *application) *http.Server {
 	static := http.FileServer(http.FS(aFS))
 	index, _ := fs.ReadFile(aFS, "index.html")
 	indexHTML := strings.ReplaceAll(string(index), "{{APP_VERSION}}", appVersion)
-	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "Local File Renamer v"+appVersion) })
+	exe, _ := os.Executable()
+	installationID := mcplaunch.InstallationID(exe)
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(mcplaunch.InstallationHeader, installationID)
+		w.Header().Set("Cache-Control", "no-store")
+		fmt.Fprint(w, "Local File Renamer v"+appVersion)
+	})
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.SetCookie(w, &http.Cookie{Name: "local_renamer", Value: nonce, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})

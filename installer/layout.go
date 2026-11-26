@@ -3,7 +3,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"debug/pe"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"localrenamer/internal/mcplaunch"
 	"localrenamer/internal/version"
 )
 
@@ -28,34 +28,48 @@ func installFiles(parent string, unpack func(string) error) (string, error) {
 		return "", err
 	}
 	if err := unpack(dir); err != nil {
-		_ = os.RemoveAll(dir)
-		return "", err
+		return "", discardIncompleteInstall(dir, err)
 	}
-	app := filepath.Join(dir, appExe)
-	if err := validateApplication(app); err != nil {
-		_ = os.RemoveAll(dir)
-		return "", err
+	if err := validateInstallation(dir); err != nil {
+		return "", discardIncompleteInstall(dir, err)
 	}
-	return app, nil
+	return filepath.Join(dir, appExe), nil
 }
 
-// validateApplication checks the executable format, not runtime compatibility.
-func validateApplication(path string) error {
-	info, err := os.Stat(path)
+// Only the directory created by this installation is removed.
+func discardIncompleteInstall(dir string, cause error) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return errors.Join(cause, fmt.Errorf("could not remove incomplete installation %s: %w", dir, err))
+	}
+	return cause
+}
+
+var requiredEngineDLLs = []string{
+	"llama-server-impl.dll", "llama-common.dll", "llama.dll", "mtmd.dll",
+	"ggml.dll", "ggml-base.dll", "libomp.dll",
+}
+
+func validateInstallation(dir string) error {
+	for _, name := range []string{appExe, mcplaunch.Executable, "engine/llama-server.exe"} {
+		if err := mcplaunch.ValidateExecutable(filepath.Join(dir, filepath.FromSlash(name))); err != nil {
+			return fmt.Errorf("installation executable %s: %w", name, err)
+		}
+	}
+	for _, name := range requiredEngineDLLs {
+		if err := mcplaunch.ValidateDLL(filepath.Join(dir, "engine", name)); err != nil {
+			return fmt.Errorf("installation dependency %s: %w", name, err)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "engine"))
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("application is not a regular file: %s", path)
-	}
-	f, err := pe.Open(path)
-	if err != nil {
-		return fmt.Errorf("invalid Windows executable: %w", err)
-	}
-	defer f.Close()
-	h, ok := f.OptionalHeader.(*pe.OptionalHeader64)
-	if !ok || f.Machine != pe.IMAGE_FILE_MACHINE_AMD64 || f.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE == 0 || f.Characteristics&pe.IMAGE_FILE_DLL != 0 || len(f.Sections) == 0 || h.AddressOfEntryPoint == 0 {
-		return fmt.Errorf("application is not a Windows x64 executable: %s", path)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "ggml-cpu-") && strings.HasSuffix(entry.Name(), ".dll") {
+			if err := mcplaunch.ValidateDLL(filepath.Join(dir, "engine", entry.Name())); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

@@ -19,7 +19,7 @@ func TestInstallBesideExistingProgram(t *testing.T) {
 	if err := os.WriteFile(prior, []byte("old version"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	unpack := func(dir string) error { return os.WriteFile(filepath.Join(dir, appExe), testPE(), 0600) }
+	unpack := writeTestInstallation
 	first, err := installFiles(parent, unpack)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestIncompleteInstallRemovesOnlyNewDirectory(t *testing.T) {
 	}
 }
 
-func testPE() []byte {
+func testPE(dll bool) []byte {
 	// Minimal structural PE fixture; it is never executed.
 	b := make([]byte, 512)
 	copy(b, "MZ")
@@ -60,7 +60,9 @@ func testPE() []byte {
 	binary.LittleEndian.PutUint16(b[68:], 0x8664)
 	binary.LittleEndian.PutUint16(b[70:], 1)
 	binary.LittleEndian.PutUint16(b[84:], 240)
-	binary.LittleEndian.PutUint16(b[86:], 2)
+	flags := uint16(2)
+	if dll { flags |= 0x2000 }
+	binary.LittleEndian.PutUint16(b[86:], flags)
 	binary.LittleEndian.PutUint16(b[88:], 0x20b)
 	binary.LittleEndian.PutUint32(b[104:], 0x1000)
 	binary.LittleEndian.PutUint32(b[196:], 16)
@@ -117,4 +119,41 @@ func TestArchiveExtraction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func writeTestInstallation(dir string) error {
+	if err := os.MkdirAll(filepath.Join(dir, "engine"), 0700); err != nil { return err }
+	for _, name := range []string{appExe, "LocalFileRenamer-MCP.exe", "engine/llama-server.exe"} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), testPE(false), 0600); err != nil { return err }
+	}
+	for _, name := range requiredEngineDLLs {
+		if err := os.WriteFile(filepath.Join(dir, "engine", name), testPE(true), 0600); err != nil { return err }
+	}
+	return nil
+}
+
+func TestIncompletePayloadPreservesPreviousInstall(t *testing.T) {
+	for _, missing := range []string{"LocalFileRenamer-MCP.exe", "engine/llama-server.exe", "engine/llama.dll"} {
+		t.Run(missing, func(t *testing.T) {
+			parent := t.TempDir()
+			prior, err := installFiles(parent, writeTestInstallation)
+			if err != nil { t.Fatal(err) }
+			unpack := func(dir string) error {
+				if err := writeTestInstallation(dir); err != nil { return err }
+				return os.Remove(filepath.Join(dir, filepath.FromSlash(missing)))
+			}
+			if _, err := installFiles(parent, unpack); err == nil { t.Fatal("accepted incomplete package") }
+			if err := validateInstallation(filepath.Dir(prior)); err != nil { t.Fatal(err) }
+			if entries, err := os.ReadDir(parent); err != nil || len(entries) != 1 { t.Fatalf("entries: %v (%v)", entries, err) }
+		})
+	}
+}
+
+func TestCorruptEngineDLLRejected(t *testing.T) {
+	parent := t.TempDir()
+	unpack := func(dir string) error {
+		if err := writeTestInstallation(dir); err != nil { return err }
+		return os.WriteFile(filepath.Join(dir, "engine", "llama.dll"), []byte("corrupt"), 0600)
+	}
+	if _, err := installFiles(parent, unpack); err == nil { t.Fatal("accepted corrupt DLL") }
 }
