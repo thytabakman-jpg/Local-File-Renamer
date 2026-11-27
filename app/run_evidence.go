@@ -35,20 +35,10 @@ func evidenceFileID(st stamp) string {
 func (s *session) evidenceDir() string { return filepath.Join(s.dir, "searchable-evidence") }
 func evidenceRecordPath(dir string, i int) string { return filepath.Join(dir, strconv.Itoa(i)+".json") }
 
-func checkEvidenceDirectory(dir string, create bool) error {
-	if create {
-		if err := os.Mkdir(dir,0700); err != nil && !errors.Is(err,os.ErrExist) { return err }
-	}
-	info, err := os.Lstat(dir)
-	if err != nil { return err }
-	if !info.IsDir() || linked(info) { return errors.New("Unsafe searchable evidence directory") }
-	return nil
-}
-
 func (s *session) saveRunEvidence(i int, st stamp, e evidence, d decision) error {
 	if st.ID == "" || st.Dir || i < 0 || i >= s.fileCount { return nil }
 	dir := s.evidenceDir()
-	if err := checkEvidenceDirectory(dir,true); err != nil { return err }
+	if err := checkLocalDataDirectory(dir,true); err != nil { return err }
 	e.Photo = nil
 	// The existing extraction caps are preserved; never imply full coverage.
 	e.Text, e.FollowupText = chars(e.Text,100000), chars(e.FollowupText,100000)
@@ -75,8 +65,12 @@ func readRunEvidence(dir string, i int) (runEvidenceRecord,error) {
 }
 
 func (s *session) clearRunEvidence() error {
+	return errors.Join(s.clearEvidenceRecords(), clearSemanticVectors(s.dir))
+}
+
+func (s *session) clearEvidenceRecords() error {
 	dir := s.evidenceDir()
-	if err := checkEvidenceDirectory(dir,false); err != nil {
+	if err := checkLocalDataDirectory(dir,false); err != nil {
 		if errors.Is(err,os.ErrNotExist) { return nil }; return err
 	}
 	entries, err := os.ReadDir(dir)
@@ -122,6 +116,22 @@ func runEvidenceMatch(rec runEvidenceRecord, path, query string) string {
 	return ""
 }
 
+// Shared admission boundary for lexical and semantic consumers. The source
+// fingerprint, journal location and selected-root checks remain authoritative.
+func (s *session) currentRunEvidence(i int) (runEvidenceRecord, string, string) {
+	if i < 0 || i >= s.fileCount || i >= len(s.manifest.Items) || i >= len(s.plans) || s.manifest.Items[i].Skip {
+		return runEvidenceRecord{}, "", "missing"
+	}
+	rec,err:=readRunEvidence(s.evidenceDir(),i)
+	if errors.Is(err,os.ErrNotExist) { return rec,"","missing" }
+	if err!=nil { return rec,"","unreadable" }
+	path:=s.currentPath(s.manifest.Items[i].Path,i)
+	if safeParent(s.manifest.Root,path)!=nil { return rec,path,"stale" }
+	st,err:=fingerprint(path)
+	if err!=nil || st!=rec.Stamp { return rec,path,"stale" }
+	return rec,path,""
+}
+
 func (a *application) searchRunEvidence(ctx context.Context, job, query string) (chatReply,error) {
 	queries,err:=evidenceQueries(query)
 	if err!=nil { return chatReply{},err }
@@ -132,7 +142,7 @@ func (a *application) searchRunEvidence(ctx context.Context, job, query string) 
 	if err!=nil { return chatReply{},err }
 	if owned { defer s.close() }
 	dir:=s.evidenceDir()
-	if err=checkEvidenceDirectory(dir,false); err!=nil {
+	if err=checkLocalDataDirectory(dir,false); err!=nil {
 		if errors.Is(err,os.ErrNotExist) { return chatReply{Message:"This run has no searchable evidence. Enable saved evidence in Settings and start a new Rename or Sorter scan."},nil }
 		return chatReply{},err
 	}
@@ -141,15 +151,12 @@ func (a *application) searchRunEvidence(ctx context.Context, job, query string) 
 	indexed,missing,stale,unreadable:=0,0,0,0
 	for i:=0;i<s.fileCount;i++ {
 		if err:=ctx.Err();err!=nil{return chatReply{},err}
-		item:=s.manifest.Items[i]
-		if item.Skip || i>=len(s.plans) { missing++; continue }
-		rec,err:=readRunEvidence(dir,i)
-		if errors.Is(err,os.ErrNotExist){ missing++;continue }
-		if err!=nil{ unreadable++;continue }
-		path:=s.currentPath(item.Path,i)
-		if safeParent(s.manifest.Root,path)!=nil{ stale++;continue }
-		st,err:=fingerprint(path)
-		if err!=nil || st!=rec.Stamp{ stale++;continue }
+		rec,path,state:=s.currentRunEvidence(i)
+		switch state {
+		case "missing": missing++; continue
+		case "stale": stale++; continue
+		case "unreadable": unreadable++; continue
+		}
 		indexed++
 		relative,err:=filepath.Rel(s.manifest.Root,path)
 		if err!=nil { relative=filepath.Base(path) }

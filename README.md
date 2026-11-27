@@ -57,6 +57,12 @@ In Settings → AI → Cache and reassessment, enable **Keep searchable sampled 
 
 Select the saved run and enter in Local chat: `search indexed files for cognitive restructuring; anxiety; grief`. Each semicolon-separated phrase is searched independently against the current filenames and recorded sampled evidence in one pass. Results include counts and up to 30 matching files per phrase. The search uses no generative model and does not contact the internet. Missing, stale, and unreadable evidence is counted separately. Source stamps are rechecked against the current file location, including moves and renames tracked by the run journal. External moves may require a new scan. A missing phrase in sampled evidence does not establish that the full file lacks it. Duplicate scans do not produce these records. Filesystem identity is not a content hash and does not persist across copies or filesystem replacement. This is a run-scoped evidence index, not yet a global SQLite database or semantic vector search.
 
+### Experimental semantic folder comparison
+
+This read-only experiment uses BGE-small-en-v1.5 F16 through the existing bundled llama.cpp server. It is separate from Rename, Sorter and Duplicate Scanner decisions. In Local chat, enter `download embedding model` to download the pinned 67.3 MB model, then select a saved run with searchable evidence and enter `compare semantic folders for file 12` (substitute the saved run's zero-based file index). No file contents are sent to the model host or any online service. The download is explicit; model bytes are verified against the pinned SHA-256.
+
+The experiment uses up to four bounded text segments per admitted file, reuses content-keyed vectors within the selected run and batches missing vectors. It freezes a deterministic sample of up to 40 distinct members per existing direct parent folder, excludes the evaluated file's identity from every profile, deduplicates identical sampled inputs within a folder (not whole-file equivalence), and compares its text segments with representative member vectors. Folder scores average the three strongest distinct member matches (or fewer if unavailable). Scores are relative similarity signals, not calibrated probabilities or evidence of the correct destination. Missing, stale, unreadable and unsampled records are reported. Output is a ranked read-only report; it cannot create a move proposal, approve a move, alter a filename or establish duplicate equivalence. It uses the shared model slot and does not run Qwen simultaneously. Clear derived vectors separately in Settings, or clear the selected run's saved evidence and its vectors together. Repeated queries can reuse vectors without starting the model when every required input is already cached; verified model bytes are still required. The current index is run-scoped, not a global database. The vector protocol includes the bundled llama.cpp version (b12588); bump it when changing the engine or preprocessing. Custom or externally modified engine binaries are outside the certified packaging configuration. Real-model compatibility and controlled accuracy/performance tests remain release gates.
+
 ## Local chat
 
 Open **Local chat** to control the current scan and inspect saved runs. Commands such as **scan scope**, **scan diagnostics**, **scan status**, **show scan history**, and **show exact duplicates** run without loading a language model. Use **start fresh** to reread the selected folder or say **“Find out why it only found nine, then start a fresh preview of every file in this folder and its subfolders.”**
@@ -139,10 +145,18 @@ Use this map before changing functionality. Locate the operational owner first; 
 | Browser HTTP interface and presentation | `main.go`, `ui/` |
 | ChatGPT Work/MCP interface | `bridge.go`, `bridge_results.go`; stable launcher in `../launcher/`, `../internal/mcplaunch/` |
 | Local chat | `local_chat.go`, `local_chat_controls.go` |
+| Searchable saved evidence and source admission | `run_evidence.go` |
+| Disposable cache and cache management | `cache.go`, `cache_management.go`; HTTP adapter in `cache_http.go` |
+| Embedding protocol and model verification | `embedding.go`; shared process lifecycle in `model.go` |
+| Content-addressed derived vectors | `embedding_store.go`; shared local-data validation in `cache_management.go` |
+| Pure experimental folder-profile scoring | `folder_profile.go` |
+| Read-only semantic experiment orchestration | `semantic_experiment.go`; existing local-chat adapter |
 | Controlled experiments and reports | `test_plan.go`, `test_runner.go`, `test_report.go`, `test_chat.go` |
 | Platform-specific implementation and Windows distribution | `platform_*.go`, `ocr_*.go`, `../installer/`, `../build-windows.sh` |
 
 Paths in the table are relative to `app/` unless stated otherwise. Keep authorization specific to each interface, but route accepted requests through the same domain methods. Never bypass revision checks, lock ownership, root and fingerprint validation, the journal, explicit duplicate approval, or preview-only permissions. Preserve journal formats, command names, response shapes and saved-run compatibility when refactoring. Avoid changing naming policy, error recovery or filesystem effects in a purely structural commit. Prefer existing files and small coherent functions; add an abstraction only when it eliminates a demonstrated ownership or dependency problem.
+
+The experimental semantic dependency direction is evidence → experiment → embedding provider / vector store / pure folder scorer, with the experiment as the consumer (no reverse dependency from extraction or the live sorter). No profile-scoring service reads or changes the filesystem, owns model processes, or calls the move journal. Live sorting remains in `sorting.go` and `move_assessment.go`. Keep the experimental boundary until frozen-input comparisons demonstrate improvement over the current lexical and Qwen-assisted baselines. Test empty folders, mixed-topic folders, exact-copy bias, stale evidence, cancelled batches, missing models, and low-memory operation; report skipped cases and model/checksum/configuration identity. Promote only tested scoring changes via the existing review flow.
 
 ### Verification before distribution
 

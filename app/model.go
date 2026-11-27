@@ -219,6 +219,17 @@ func startModelWith(ctx context.Context, backend, dir, logPath string, opts scan
 	if !modelReadyFor(dir, opts.AI.Model) {
 		return nil, modelFailure{modelProcess, "local model files are unavailable"}
 	}
+	_, _, resources := modelProfileFor(opts.AI.Model)
+	args := []string{"--ctx-size", strconv.Itoa(modelContextTokens), "--parallel", "1", "--threads", strconv.Itoa(opts.Resources.Threads), "--threads-batch", strconv.Itoa(opts.Resources.BatchThreads), "--n-gpu-layers", "0",
+		"--jinja", "--no-webui", "--reasoning", "off", "--no-warmup", "--cache-ram", "0"}
+	if vision {
+		args = append(args, "--mmproj", filepath.Join(dir, resources[1].name), "--no-mmproj-offload", "--image-max-tokens", strconv.Itoa(modelVisionLimit))
+	}
+	return startLocalModelServer(ctx, backend, logPath, opts, filepath.Join(dir, resources[0].name), args)
+}
+
+// Shared loopback process lifecycle for generative and embedding model adapters.
+func startLocalModelServer(ctx context.Context, backend, logPath string, opts scanSettings, modelPath string, modelArgs []string) (*localModel, error) {
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -229,15 +240,8 @@ func startModelWith(ctx context.Context, backend, dir, logPath string, opts scan
 	if runtime.GOOS == "windows" {
 		exe += ".exe"
 	}
-	_, _, resources := modelProfileFor(opts.AI.Model)
 	auth := token()
-	args := []string{"--host", "127.0.0.1", "--port", fmt.Sprint(port), "--api-key", auth,
-		"--model", filepath.Join(dir, resources[0].name),
-		"--ctx-size", strconv.Itoa(modelContextTokens), "--parallel", "1", "--threads", strconv.Itoa(opts.Resources.Threads), "--threads-batch", strconv.Itoa(opts.Resources.BatchThreads), "--n-gpu-layers", "0",
-		"--jinja", "--no-webui", "--reasoning", "off", "--no-warmup", "--cache-ram", "0"}
-	if vision {
-		args = append(args, "--mmproj", filepath.Join(dir, resources[1].name), "--no-mmproj-offload", "--image-max-tokens", strconv.Itoa(modelVisionLimit))
-	}
+	args := append([]string{"--host", "127.0.0.1", "--port", fmt.Sprint(port), "--api-key", auth, "--model", modelPath}, modelArgs...)
 	cmd := exec.CommandContext(ctx, exe, args...)
 	configureModelPriority(cmd, opts.Resources.Priority)
 	cmd.Dir = backend

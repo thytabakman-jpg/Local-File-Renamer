@@ -28,22 +28,32 @@ func readCachePolicy(home string) (cachePolicy, error) {
  return p, nil
 }
 
-func isAssessmentCacheFile(name string) bool {
+func checkLocalDataDirectory(dir string, create bool) error {
+	if create {
+		if err := os.Mkdir(dir,0700); err != nil && !errors.Is(err,os.ErrExist) { return err }
+	}
+	info, err := os.Lstat(dir)
+	if err != nil { return err }
+	if !info.IsDir() || linked(info) { return errors.New("Unsafe local data directory") }
+	return nil
+}
+
+func isDigestJSONFile(name string) bool {
  if len(name) != 69 || !strings.HasSuffix(name, ".json") { return false }
  _, err := hex.DecodeString(name[:64]); return err == nil
 }
 
-// Only regular files with the app's exact cache-key naming format are eligible.
-func walkAssessmentCache(dir string, visit func(string, os.FileInfo) error) error {
+// Shared low-level storage helper: only regular files with a digest JSON key are eligible.
+func walkDigestJSONFiles(dir string, visit func(string, os.FileInfo) error) error {
  root, err := os.Lstat(dir)
  if errors.Is(err, os.ErrNotExist) { return nil }
  if err != nil { return err }
- if !root.IsDir() || linked(root) { return errors.New("Unsafe assessment cache directory") }
+ if !root.IsDir() || linked(root) { return errors.New("Unsafe digest JSON directory") }
  entries, err := os.ReadDir(dir)
  if err != nil { return err }
  var failures []error
  for _, entry := range entries {
-  if !isAssessmentCacheFile(entry.Name()) { continue }
+  if !isDigestJSONFile(entry.Name()) { continue }
   info, err := entry.Info()
   if err != nil { failures = append(failures, err); continue }
   if !info.Mode().IsRegular() || linked(info) { continue }
@@ -54,7 +64,7 @@ func walkAssessmentCache(dir string, visit func(string, os.FileInfo) error) erro
 
 func assessmentCacheStats(dir string, p cachePolicy) (cacheStats, error) {
  stats := cacheStats{RetentionHours:p.RetentionHours}
- err := walkAssessmentCache(dir, func(_ string, info os.FileInfo) error { stats.Entries++; stats.Bytes += info.Size(); return nil })
+ err := walkDigestJSONFiles(dir, func(_ string, info os.FileInfo) error { stats.Entries++; stats.Bytes += info.Size(); return nil })
  return stats, err
 }
 
@@ -62,7 +72,7 @@ func pruneAssessmentCache(dir string, p cachePolicy, now time.Time) error {
  if !p.valid() { return errors.New("Invalid cache retention") }
  if p.RetentionHours == 0 { return nil }
  cutoff := now.Add(-time.Duration(p.RetentionHours)*time.Hour)
- return walkAssessmentCache(dir, func(path string, info os.FileInfo) error { if info.ModTime().Before(cutoff) { return os.Remove(path) }; return nil })
+ return walkDigestJSONFiles(dir, func(path string, info os.FileInfo) error { if info.ModTime().Before(cutoff) { return os.Remove(path) }; return nil })
 }
 
 func pruneConfiguredCache(home string) error {
@@ -72,7 +82,7 @@ func pruneConfiguredCache(home string) error {
 }
 
 func clearAssessmentCache(dir string, assessmentsOnly bool) error {
- return walkAssessmentCache(dir, func(path string, info os.FileInfo) error {
+ return walkDigestJSONFiles(dir, func(path string, info os.FileInfo) error {
   if !assessmentsOnly { return os.Remove(path) }
   if info.Size() > 2<<20 { return fmt.Errorf("Cache entry too large for selective clearing: %s",filepath.Base(path)) }
   data, err := os.ReadFile(path); if err != nil { return err }

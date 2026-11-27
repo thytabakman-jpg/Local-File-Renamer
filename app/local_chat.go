@@ -153,6 +153,12 @@ var skipImagesText = regexp.MustCompile(`(?i)\b(?:skip|exclude|ignore|without|no
 
 func immediateChatPlan(message string) (chatPlan, bool) {
 	lower := strings.ToLower(message)
+	if strings.TrimSpace(lower) == "download embedding model" {
+		return chatPlan{Action: "download_embedding"}, true
+	}
+	if strings.HasPrefix(lower, "compare semantic folders for file ") {
+		return chatPlan{Action: "compare_semantic_folders", Query: strings.TrimSpace(message[len("compare semantic folders for file "):])}, true
+	}
 	if strings.HasPrefix(lower, "search indexed files for ") {
 		return chatPlan{Action:"search_run_evidence", Query: strings.TrimSpace(message[len("search indexed files for "):])}, true
 	}
@@ -383,6 +389,12 @@ func (a *application) executeChat(ctx context.Context, plan chatPlan, folder str
 	v := a.snapshot()
 	response := chatReply{}
 	switch plan.Action {
+	case "download_embedding":
+		return a.downloadEmbedding(ctx)
+	case "compare_semantic_folders":
+		index, err := strconv.Atoi(plan.Query)
+		if err != nil || index < 0 { return response, errors.New("Use: compare semantic folders for file N, where N is the saved run's file index") }
+		return a.compareSemanticFolders(ctx, v.Job, index)
 	case "search_run_evidence":
 		return a.searchRunEvidence(ctx, v.Job, plan.Query)
 	case "search":

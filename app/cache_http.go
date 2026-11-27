@@ -35,9 +35,9 @@ func (a *application) registerCacheRoutes(mux *http.ServeMux, auth func(http.Res
    err = clearAssessmentCache(dir,false)
   case "clear-assessments":
    err = clearAssessmentCache(dir,true)
-  case "clear-run-evidence":
+  case "clear-run-evidence", "clear-semantic-vectors":
    if a.s == nil || q.Job == "" || q.Job != a.v.Job { http.Error(w,"Select the saved run again before clearing its evidence",409); return }
-   err = a.s.clearRunEvidence()
+   if q.Action == "clear-run-evidence" { err = a.s.clearRunEvidence() } else { err = clearSemanticVectors(a.s.dir) }
   default:
    http.Error(w,"Unknown cache action",400); return
   }

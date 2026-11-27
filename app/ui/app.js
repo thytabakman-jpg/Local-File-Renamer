@@ -7,7 +7,7 @@ const phases = {
   files: "Reading files", folders: "Checking folders", paused: "Scan paused",
   preview: "Preview ready", applying: "Applying changes", metadata: "Repairing metadata", "apply-paused": "Apply paused", "legacy-paused": "Previous scan paused",
   complete: "Complete", reassessing: "Reassessing files", download: "Downloading model", undo: "Undoing changes",
-  "undo-paused": "Undo paused", undone: "Changes undone"
+  "undo-paused": "Undo paused", undone: "Changes undone", "semantic-experiment": "Semantic experiment"
 };
 let latest = {};
 let lastJob = "";
@@ -263,6 +263,11 @@ function attachCacheManagement(section) {
     if (!job) { status.textContent = "Select a saved run first."; return; }
     if (window.confirm("Delete the searchable evidence of the currently selected saved run? This does not remove its review results or source files.")) request({action:"clear-run-evidence",job});
   });
+  button("Clear selected run's semantic vectors", () => {
+    const job = latest.Job;
+    if (!job) { status.textContent = "Select a saved run first."; return; }
+    if (window.confirm("Clear derived semantic vectors for this saved run? Extracted evidence and file operation history are retained.")) request({action:"clear-semantic-vectors",job});
+  });
   section.addEventListener("toggle", () => { if (section.open) request(); });
   section.append(status,row,help,buttons);
 }
@@ -479,7 +484,7 @@ function render(s) {
   const chosenOperation = el("scan-operation").value;
   const partial = el("partial").checked || !s.ModelReady || scanProfile?.effective.ai.invoke === "never";
   const differentFolder = hadWork && folderKey(el("folder").value) !== folderKey(s.Root);
-  const scanning = ["indexing", "starting", "files", "folders", "reassessing", "undo", "applying", "metadata"].includes(s.Phase);
+  const scanning = ["indexing", "starting", "files", "folders", "reassessing", "undo", "applying", "metadata", "semantic-experiment"].includes(s.Phase);
 
   el("phase").textContent = startFailed ? "Scan failed" : s.Pausing ? "Pausing…" : (phases[s.Phase] || s.Phase);
   notice(actionMessage || (startFailed && s.StartError) || s.Message || (s.Phase === "legacy-paused" ? "Start a new scan to review changes from this folder." : ""));
