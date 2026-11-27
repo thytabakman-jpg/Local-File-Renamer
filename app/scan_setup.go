@@ -208,9 +208,6 @@ func (a *application) startLocked(p string, partial bool, opts scanSettings, ope
 	a.v.StartID, a.v.StartJob, a.v.StartError, a.v.StartingRoot = setup.RequestID, setup.JobID, "", p
 	a.v.StartingScope, a.v.StartingMode = opts.Scope.description(), opts.Execution.Mode
 	ctx := a.begin("indexing")
-	if err := pruneConfiguredCache(a.home); err != nil {
-		a.v.Message = joinNote(a.v.Message, "Cache cleanup: "+err.Error())
-	}
 	failStart := func(err error) {
 		message := err.Error()
 		if errors.Is(err, context.Canceled) {
@@ -222,6 +219,11 @@ func (a *application) startLocked(p string, partial bool, opts scanSettings, ope
 		a.finish(err)
 	}
 	go func() {
+		if err := pruneConfiguredCache(a.home); err != nil {
+			a.mu.Lock()
+			a.v.Message = joinNote(a.v.Message, "Cache cleanup: "+err.Error())
+			a.mu.Unlock()
+		}
 		if err := validateRoot(p); err != nil {
 			failStart(err)
 			return

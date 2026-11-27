@@ -160,7 +160,12 @@ func prepareEvidence(ctx context.Context, path, name, cacheName string, st stamp
 			if c, ok := readCache(candidate, st); ok && localEvidenceSettings(c.EvidenceConfig) == localEvidenceSettings(opts.Evidence) && c.DecodeMemory == opts.Resources.DecodeMemoryMiB &&
 				(c.OCRModel == "" || opts.Evidence.OCREngine != "tesseract" && c.OCRModel == modelCacheKey(opts.AI.Model) && c.AIConfig == opts.AI) {
 				if candidate != cacheName && ctx.Err() == nil {
-					_ = atomicJSON(cacheName, c)
+					// Migration is not a new assessment and must not reset retention.
+					if info, err := os.Stat(candidate); err == nil {
+						if err := atomicJSON(cacheName, c); err == nil {
+							_ = os.Chtimes(cacheName, info.ModTime(), info.ModTime())
+						}
+					}
 				}
 				return preparedEvidence{Evidence: c.Evidence, Stamp: st, Cached: c, Reused: true, Deepened: c.Deepened}
 			}
