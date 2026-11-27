@@ -1,0 +1,47 @@
+name: Windows release candidate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify source
+        run: |
+          go version
+          go vet ./...
+          go test -count=1 ./...
+          go test -race -count=1 ./app
+      - name: Build and verify Windows distribution
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh ./build-windows.sh
+          version=$(sed -n 's/^const Current = "\([^"]*\)"$/\1/p' internal/version/version.go)
+          cd build
+          sha256sum "LocalFileRenamer-Installer-$version.zip" "LocalFileRenamer-Setup-$version.exe" > SHA256SUMS.txt
+          printf '%s\n' "$GITHUB_SHA" > SOURCE-COMMIT.txt
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Upload candidate, checksums and source identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalFileRenamer-${{ steps.package.outputs.version }}-windows-candidate-${{ github.sha }}
+          path: |
+            build/LocalFileRenamer-Installer-*.zip
+            build/SHA256SUMS.txt
+            build/SOURCE-COMMIT.txt
+          if-no-files-found: error
+          retention-days: 14
