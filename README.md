@@ -2,7 +2,9 @@
 
 Version 4.0 reorganises scan setup, review and reporting, file-move planning, and HTTP route registration without intentionally changing existing behaviour or interfaces.
 
-**Source and release versions:** The version in this README identifies the source on `main`, not necessarily the latest published [GitHub release](https://github.com/thytabakman-jpg/Local-File-Renamer/releases). Use the installer from the matching release tag (`v4.0` for this source), or build it from this source using the instructions below. An older release is not an installer for the current source version.
+**Release status:** 4.0 is the current source version, not a verified Windows release. The [Releases page](https://github.com/thytabakman-jpg/Local-File-Renamer/releases) is the authoritative download location for published installers. The [Windows release candidate workflow](https://github.com/thytabakman-jpg/Local-File-Renamer/actions/workflows/windows-release-candidate.yml) builds a candidate for the exact commit on `main`; an uploaded workflow artifact is not a qualified release. Do not substitute a 3.x installer for 4.0. The 4.0 download becomes official only after the matching build and native Windows release checks below pass.
+
+**Repository ownership:** This dedicated repository is the authoritative source, build procedure, navigation guide and release location. A source tree in `Reaserch`, an installer in a ChatGPT conversation or Library, and a local download are not independent authorities. Match the source commit, version and SHA-256 checksum before distributing a binary.
 
 Local File Renamer for Windows x64 proposes filename changes and file moves, and checks for duplicates. Setup installs for the current user and adds a Start menu shortcut. The launcher opens the app at `http://127.0.0.1:39173/`.
 
@@ -128,12 +130,31 @@ The connection can start and pause scans, read proposed changes and reports, man
 
 ## Architecture and development guide
 
+### Navigation by execution path
+
+All paths below are repository-relative.
+
+| Workflow | Follow these files in order |
+| --- | --- |
+| Start or resume a scan | `app/ui/operations.js` → `app/main.go` / `app/bridge.go` → `app/scan_setup.go` (`launchScan`, `startLocked`, `resumeLocked`, `scanInventory`) → `app/app.go` (`run`) |
+| Assess a file | `app/worker.go` (`prepareEvidence`, `inspectPrepared`, `finalizeInspectionDecision`) → extraction, classification, naming and model helpers → `app/journal.go` |
+| Review or change a proposal | `app/ui/review.js` → HTTP/MCP adapter → `app/review_preview.go` for queries/previews; `app/flagged_review.go` for recommendations and recycling; `app/control.go` for corrections/reassessment |
+| Apply or undo renames | HTTP/MCP adapter → `app/apply_all.go` for selection and revision checks → `app/journal.go` for filesystem changes and durable records; `app/control.go` for undo entry points |
+| Plan and apply moves | `app/move_assessment.go` for per-file assessment and proposal creation → `app/sorting.go` for destination scoring → `app/move_batch.go` for batch preflight, overrides and folder preparation → `app/journal.go` |
+| Detect and recycle duplicates | `app/scan_operations.go` → `app/duplicate_equivalence.go` → `app/duplicate_review.go` / `app/duplicate_batch.go` → journal validation and platform recycling |
+| Read results and compare runs | `app/review_preview.go` / `app/scan_operations.go` → `app/diagnostics.go` for reports, timing and CSV → `app/completion.go` for receipts, comparisons and zero-change explanations |
+| Install and connect | `internal/version/version.go` → `build-windows.sh` → `installer/main.go`, `installer/layout.go`, `installer/engine.go` → `internal/mcplaunch/`, `launcher/` → `app/main.go` and `app/bridge.go` |
+
+In 4.0, `app/main.go` separates route registration into chat, preview, status, export, scan-results and action handlers. The action dispatcher is an interface adapter, not the location for new filesystem rules. Journal record acceptance is split into named handlers in `app/journal.go`. Move-batch preflight and destination overrides belong in `app/move_batch.go`, not in the MCP or HTTP adapters.
+
+### File ownership map
+
 Use this map before changing functionality. Locate the operational owner first; keep interface adapters small and do not duplicate domain rules merely to expose another command. The Go files in `app/` share a package, so these ownership boundaries are conventions, not compiler-enforced package isolation.
 
 | Responsibility | Authoritative implementation locations |
 | --- | --- |
 | Application lifecycle, scan orchestration and shared view | `app.go` |
-| Scan configuration, scope, inventory and start/resume | `scan_setup.go`, `scan_operations.go` |
+| Scan configuration, scope, inventory and start/resume | `scan_setup.go`; `scan_operations.go` owns operation result queries and duplicate scanning |
 | Evidence collection, OCR, model assessment and final decision | `worker.go`, `extract.go`, `ocr*.go`, `media*.go`, `scan_model.go`, `model.go`, `cache.go`, `online.go` |
 | Classification, filename rules and document-specific naming | `classification.go`, `naming.go`, `rules.go`, `title_style.go`, `article_front_matter.go`, `image_names.go`, `versions.go` |
 | Apply rename selections, revision checks and locking | `apply_all.go`; correction/reassessment and undo entry points in `control.go` |
@@ -142,7 +163,7 @@ Use this map before changing functionality. Locate the operational owner first; 
 | Journal validation, durable state transitions, conflict checks and recovery | `journal.go`, `metadata_journal.go`, `integrity.go`; metadata evidence/repair in `metadata.go` |
 | Review queries and previews; diagnostics, export and completion | `review_preview.go`, `flagged_review.go`, `diagnostics.go`, `completion.go` |
 | Profiles, resource settings and permissions | `settings.go`, `rules.go` |
-| Browser HTTP interface and presentation | `main.go`, `ui/` |
+| Browser HTTP interface and presentation | `main.go` (route groups and dispatcher); `ui/index.html`, `ui/app.js`, `ui/operations.js`, `ui/review.js`, `ui/chat.js`, `ui/console.js`, `ui/style.css` |
 | ChatGPT Work/MCP interface | `bridge.go`, `bridge_results.go`; stable launcher in `../launcher/`, `../internal/mcplaunch/` |
 | Local chat | `local_chat.go`, `local_chat_controls.go` |
 | Searchable saved evidence and source admission | `run_evidence.go` |
@@ -159,6 +180,14 @@ Paths in the table are relative to `app/` unless stated otherwise. Keep authoriz
 The experimental semantic dependency direction is evidence → experiment → embedding provider / vector store / pure folder scorer, with the experiment as the consumer (no reverse dependency from extraction or the live sorter). No profile-scoring service reads or changes the filesystem, owns model processes, or calls the move journal. Live sorting remains in `sorting.go` and `move_assessment.go`. Keep the experimental boundary until frozen-input comparisons demonstrate improvement over the current lexical and Qwen-assisted baselines. Test empty folders, mixed-topic folders, exact-copy bias, stale evidence, cancelled batches, missing models, and low-memory operation; report skipped cases and model/checksum/configuration identity. Promote only tested scoring changes via the existing review flow.
 
 ### Verification before distribution
+
+A release is not complete when the source version changes or a commit is merged. The release owner must:
+
+1. Verify that the source version and README agree, and reconcile the navigation and ownership maps against the current files.
+2. Run the source tests and build the installer from that exact commit. The candidate workflow performs Linux vet, tests, race checks and the Windows cross-build/ZIP checks; record its result, commit SHA and SHA-256 hashes. If the workflow cannot execute, run the same commands in a compatible local environment and record the evidence.
+3. Install the resulting Setup on Windows x64, close any prior running app, launch the new Start menu target, and confirm `/status` and MCP `renamer_capabilities` identify the intended running and bridge versions. Perform the disposable-folder checks below, including real local inference where claimed.
+4. Publish the exact verified installer ZIP and its checksum to the corresponding GitHub release tag. Confirm the tag points to the tested commit, the asset is downloadable, and its checksum agrees. A workflow artifact or an empty release is not the official installer.
+5. Only after that confirmation, remove obsolete standalone copies and legacy source duplicates after checking for unique content and live references. Preserve Git history, release verification evidence, user models, profiles, saved scans and cache data. Keep distribution links pointed at the official release.
 
 Run from the repository root with the Go version pinned in `go.mod` and required modules available. On Linux (or a compatible Linux development environment), execute:
 
