@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 // Evidence format version is independent of the application release.
@@ -82,19 +81,12 @@ func readCache(path string, st stamp) (assessmentCache, bool) {
 	return c, true
 }
 
-func pruneCache(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().AddDate(0, 0, -90)
-	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
-				_ = os.Remove(filepath.Join(dir, entry.Name()))
-			}
-		}
-	}
+// Keep filename-dependent assessments separate after renames, but allow a
+// move with the same basename and filesystem identity to reuse them.
+// The complete stamp and evidence/model settings are still checked on read.
+func stableCachePath(dir, path string, vision bool, st stamp) string {
+ if st.ID == "" { return cachePath(dir,path,vision) }
+ return cachePath(dir,"stable-v1:"+st.ID+"\x00"+filepath.Base(path),vision)
 }
 
 func modelCacheKey(selection string) string {

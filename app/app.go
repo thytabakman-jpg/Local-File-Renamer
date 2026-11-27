@@ -91,7 +91,9 @@ func newApp(home, backend, modelDir string) (*application, error) {
 	if err := os.MkdirAll(filepath.Join(home, "assessment-cache"), 0700); err != nil {
 		return nil, err
 	}
-	pruneCache(filepath.Join(home, "assessment-cache"))
+	if err := pruneConfiguredCache(home); err != nil {
+		a.v.Message = joinNote(a.v.Message, "Cache cleanup: "+err.Error())
+	}
 	a.scanJobs()
 	if len(a.v.Jobs) > 0 {
 		s, err := openSession(filepath.Join(home, "runs", a.v.Jobs[0].ID))

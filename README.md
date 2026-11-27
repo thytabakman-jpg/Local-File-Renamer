@@ -47,6 +47,10 @@ The installer keeps app versions in separate directories and installs a stable S
 
 For a focused diagnostic scan, enable **Save local model evidence for diagnostic export** in the model settings. The app keeps the text request, JSON response when available, and engine timing for each captured attempt. Review offers an export per file, and the JSON files are also under the run's `model-evidence` directory. The export records whether an image was attached.
 
+### Cache management
+
+Under Settings → AI → Cache and reassessment, inspect the cache size and entry count, set a global retention period in hours (default 2160, or 90 days; 24 means one day; 0 keeps entries indefinitely), clear model assessments while retaining extracted evidence and OCR, or use **Clear Cache** to remove all cached assessments and evidence. Retention is applied on app startup and before a new scan. Cache clearing is available only while the app is idle and never removes source files, saved runs, or model downloads. Existing path-keyed cache entries migrate on a compatible read; unchanged files moved between folders retain their cache identity when the basename and filesystem identity are unchanged. Renames remain separate because the model sees the filename. All original stamp and settings checks remain in force.
+
 ## Local chat
 
 Open **Local chat** to control the current scan and inspect saved runs. Commands such as **scan scope**, **scan diagnostics**, **scan status**, **show scan history**, and **show exact duplicates** run without loading a language model. Use **start fresh** to reread the selected folder or say **“Find out why it only found nine, then start a fresh preview of every file in this folder and its subfolders.”**

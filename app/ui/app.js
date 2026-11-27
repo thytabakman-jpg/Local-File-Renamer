@@ -212,6 +212,56 @@ el("reassess-group").onclick = () => {
   if (value?.trim()) action("reassess", {id:latest.Job, revision:latest.Revision, group, value:value.trim(), refresh:el("fresh-assessment").checked});
 };
 
+function attachCacheManagement(section) {
+  const status = document.createElement("p");
+  status.setAttribute("role", "status");
+  status.textContent = "Open to inspect cache storage.";
+  const row = document.createElement("label");
+  row.className = "setting-field";
+  const label = document.createElement("span");
+  label.textContent = "Cache retention in hours (0 = keep indefinitely)";
+  const hours = document.createElement("input");
+  hours.type = "number"; hours.min = "0"; hours.max = "8760"; hours.step = "1"; hours.value = "2160"; hours.required = true;
+  row.append(label,hours);
+  const help = document.createElement("p");
+  help.textContent = "Global cache setting, independent of scan profiles. Expired entries are removed at app startup or the next new scan. Clearing the cache does not delete source files, saved runs, or installed models.";
+  const buttons = document.createElement("div");
+  buttons.className = "actions";
+  let pending = false;
+  async function request(payload) {
+    if (pending) return;
+    pending = true;
+    const controls = buttons.querySelectorAll("button");
+    controls.forEach(b => b.disabled = true);
+    try {
+      const response = await fetch("/api/cache", payload ? {
+        method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)
+      } : {cache:"no-store",signal:AbortSignal.timeout(10000)});
+      if (!response.ok) throw new Error((await response.text()).trim());
+      const value = await response.json();
+      status.textContent = value.entries.toLocaleString() + " cached entries · " + (value.bytes / 1048576).toFixed(2) + " MiB";
+      hours.value = String(value.retention_hours);
+    } catch (err) { status.textContent = err.message; }
+    finally { pending = false; controls.forEach(b => b.disabled = false); }
+  }
+  function button(text, handler) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "secondary"; b.textContent = text; b.onclick = handler; buttons.append(b);
+  }
+  button("Refresh cache size", () => request());
+  button("Save retention", () => {
+    if (!hours.reportValidity()) return;
+    request({action:"set-retention",retention_hours:Number(hours.value)});
+  });
+  button("Clear model assessments", () => {
+    if (window.confirm("Clear cached naming and folder-topic assessments, while keeping extracted evidence and OCR?")) request({action:"clear-assessments"});
+  });
+  button("Clear Cache", () => {
+    if (window.confirm("Clear all cached file evidence and assessments? Original files and saved runs are not deleted.")) request({action:"clear-all"});
+  });
+  section.addEventListener("toggle", () => { if (section.open) request(); });
+  section.append(status,row,help,buttons);
+}
+
 function populateSettings(data, profile) {
   const nodes = [];
   for (const [group, label] of Object.entries(profileSections)) {
@@ -249,6 +299,7 @@ function populateSettings(data, profile) {
       row.append(caption,input);
       section.append(row);
     }
+    if (group === "cache") attachCacheManagement(section);
     nodes.push(section);
   }
   el("profile-fields").replaceChildren(...nodes);

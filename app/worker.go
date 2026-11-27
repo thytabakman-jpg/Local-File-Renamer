@@ -154,10 +154,17 @@ type preparedEvidence struct {
 }
 
 func prepareEvidence(ctx context.Context, path, name, cacheName string, st stamp, vision bool, opts scanSettings) preparedEvidence {
-	if opts.Cache.ReuseEvidence {
-		if c, ok := readCache(cacheName, st); ok && localEvidenceSettings(c.EvidenceConfig) == localEvidenceSettings(opts.Evidence) && c.DecodeMemory == opts.Resources.DecodeMemoryMiB &&
-			(c.OCRModel == "" || opts.Evidence.OCREngine != "tesseract" && c.OCRModel == modelCacheKey(opts.AI.Model) && c.AIConfig == opts.AI) {
-			return preparedEvidence{Evidence: c.Evidence, Stamp: st, Cached: c, Reused: true, Deepened: c.Deepened}
+	if opts.Cache.ReuseEvidence && cacheName != "" {
+		legacy := cachePath(filepath.Dir(cacheName), path, vision)
+		for _, candidate := range []string{cacheName, legacy} {
+			if c, ok := readCache(candidate, st); ok && localEvidenceSettings(c.EvidenceConfig) == localEvidenceSettings(opts.Evidence) && c.DecodeMemory == opts.Resources.DecodeMemoryMiB &&
+				(c.OCRModel == "" || opts.Evidence.OCREngine != "tesseract" && c.OCRModel == modelCacheKey(opts.AI.Model) && c.AIConfig == opts.AI) {
+				if candidate != cacheName && ctx.Err() == nil {
+					_ = atomicJSON(cacheName, c)
+				}
+				return preparedEvidence{Evidence: c.Evidence, Stamp: st, Cached: c, Reused: true, Deepened: c.Deepened}
+			}
+			if legacy == cacheName { break }
 		}
 	}
 	started := time.Now()
@@ -313,7 +320,7 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 		return folderDecision(ctx, item.Path, assess, s), st, ctx.Err()
 	}
 	vision := assess != nil
-	cacheName := cachePath(s.cacheDir, item.Path, vision)
+	cacheName := stableCachePath(s.cacheDir, item.Path, vision, st)
 	if pre == nil || pre.Stamp != st {
 		p := prepareEvidence(ctx, item.Path, name, cacheName, st, vision, opts)
 		pre = &p
@@ -543,7 +550,7 @@ func prefetchEvidence(ctx context.Context, s *session, start int, opts scanSetti
 			if err != nil || st.Dir {
 				return
 			}
-			result.data = prepareEvidence(ctx, item.Path, filepath.Base(item.Path), cachePath(s.cacheDir, item.Path, vision), st, vision, opts)
+			result.data = prepareEvidence(ctx, item.Path, filepath.Base(item.Path), stableCachePath(s.cacheDir, item.Path, vision, st), st, vision, opts)
 		}(i)
 	}
 	for i := start; i < end; i++ {

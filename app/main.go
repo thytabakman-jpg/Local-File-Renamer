@@ -303,6 +303,7 @@ func (a *application) registerStatusRoutes(mux *http.ServeMux, auth func(http.Re
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(data)
 	})
+	a.registerCacheRoutes(mux, auth)
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
