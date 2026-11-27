@@ -190,6 +190,14 @@ func writeTestVariant(out *strings.Builder, job savedTest, index int, finding te
 		fmt.Fprintf(out, "- Source: saved Rename scan %s. Relative paths and bytes were verified. This scan predates the test runner's version and memory logging.\n", variant.BaselineJob)
 	}
 	writeTestCriteria(out, variant.Criteria, finding)
+	modelRows, reusedRows, evidenceRows := 0, 0, 0
+	for _, row := range finding.Rows {
+		i := row.Inspection
+		if i.ModelMS > 0 { modelRows++ }
+		if i.Cache == "Assessment reused" || i.Cache == "Folder topic reused" { reusedRows++ }
+		if i.Text || i.Metadata || i.Image { evidenceRows++ }
+	}
+	fmt.Fprintf(out, "- Rows with recorded model time: %d; cached assessment rows: %d; rows with readable evidence: %d. These are row counts, not exact inference request counts.\n", modelRows, reusedRows, evidenceRows)
 	opts := job.Settings[index]
 	if !full {
 		opts.AI.Instructions = ""

@@ -21,7 +21,7 @@ func (a *application) registerCacheRoutes(mux *http.ServeMux, auth func(http.Res
  mux.HandleFunc("POST /api/cache",func(w http.ResponseWriter,r *http.Request) {
   if !auth(w,r) { return }
   if !strings.HasPrefix(r.Header.Get("Content-Type"),"application/json") { http.Error(w,"JSON action required",415); return }
-  var q struct { Action string `json:"action"`; RetentionHours *int `json:"retention_hours"` }
+  var q struct { Action string `json:"action"`; RetentionHours *int `json:"retention_hours"`; Job string `json:"job"` }
   if err := json.NewDecoder(http.MaxBytesReader(w,r.Body,4096)).Decode(&q); err != nil { http.Error(w,"Invalid cache action",400); return }
   a.mu.Lock(); defer a.mu.Unlock()
   if a.v.Busy || a.v.Closing { http.Error(w,"Pause the active run before managing the cache",409); return }
@@ -35,6 +35,9 @@ func (a *application) registerCacheRoutes(mux *http.ServeMux, auth func(http.Res
    err = clearAssessmentCache(dir,false)
   case "clear-assessments":
    err = clearAssessmentCache(dir,true)
+  case "clear-run-evidence":
+   if a.s == nil || q.Job == "" || q.Job != a.v.Job { http.Error(w,"Select the saved run again before clearing its evidence",409); return }
+   err = a.s.clearRunEvidence()
   default:
    http.Error(w,"Unknown cache action",400); return
   }

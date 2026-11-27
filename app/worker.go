@@ -332,9 +332,19 @@ func inspectPrepared(ctx context.Context, s *session, assess assessFile, transcr
 	}
 	cached, reused, e, readMS := pre.Cached, pre.Reused, pre.Evidence, pre.ReadMS
 	e, ocrStatus, ocrMS, ocrErr := supplementPDFEvidence(ctx, s, opts, item, name, override, e, reused, cached.OCR, transcribe)
+	if opts.Cache.KeepRunEvidence {
+		defer func() {
+			if failure == nil && ctx.Err() == nil {
+				// Include any later PDF samples in the stored evidence.
+				if err := s.saveRunEvidence(i, st, e, result); err != nil {
+					result.Inspection.Detail = joinNote(result.Inspection.Detail, "Searchable evidence could not be saved: "+err.Error())
+				}
+			}
+		}()
+	}
 
 	if s.manifest.Operation == scanMove {
-		return inspectLocation(ctx, s, assess, opts, item.Path, name, cacheName, *pre, e, ocrStatus, ocrMS, ocrErr, refresh), st, ctx.Err()
+		return inspectLocation(ctx, s, assess, opts, item.Path, name, cacheName, *pre, e, ocrStatus, ocrMS, ocrErr, refresh, &e), st, ctx.Err()
 	}
 	if isMedia(name) {
 		if opts.Evidence.MediaSamples && assess != nil {

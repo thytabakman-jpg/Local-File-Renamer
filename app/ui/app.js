@@ -258,6 +258,11 @@ function attachCacheManagement(section) {
   button("Clear Cache", () => {
     if (window.confirm("Clear all cached file evidence and assessments? Original files and saved runs are not deleted.")) request({action:"clear-all"});
   });
+  button("Clear selected run's saved evidence", () => {
+    const job = latest.Job;
+    if (!job) { status.textContent = "Select a saved run first."; return; }
+    if (window.confirm("Delete the searchable evidence of the currently selected saved run? This does not remove its review results or source files.")) request({action:"clear-run-evidence",job});
+  });
   section.addEventListener("toggle", () => { if (section.open) request(); });
   section.append(status,row,help,buttons);
 }

@@ -153,6 +153,9 @@ var skipImagesText = regexp.MustCompile(`(?i)\b(?:skip|exclude|ignore|without|no
 
 func immediateChatPlan(message string) (chatPlan, bool) {
 	lower := strings.ToLower(message)
+	if strings.HasPrefix(lower, "search indexed files for ") {
+		return chatPlan{Action:"search_run_evidence", Query: strings.TrimSpace(message[len("search indexed files for "):])}, true
+	}
 	for _, prefix := range []string{"search online for ", "search the web for ", "look up online "} {
 		if strings.HasPrefix(lower, prefix) {
 			return chatPlan{Action: "search", Query: strings.TrimSpace(message[len(prefix):])}, true
@@ -380,6 +383,8 @@ func (a *application) executeChat(ctx context.Context, plan chatPlan, folder str
 	v := a.snapshot()
 	response := chatReply{}
 	switch plan.Action {
+	case "search_run_evidence":
+		return a.searchRunEvidence(ctx, v.Job, plan.Query)
 	case "search":
 		if err := a.requireOnline(); err != nil {
 			return response, err

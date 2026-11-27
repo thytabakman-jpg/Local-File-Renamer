@@ -8,7 +8,10 @@ import (
 )
 
 func inspectLocation(ctx context.Context, s *session, assess assessFile, opts scanSettings, path, name, cacheName string,
-	pre preparedEvidence, e evidence, ocr string, ocrMS int64, ocrErr error, refresh bool) decision {
+	pre preparedEvidence, e evidence, ocr string, ocrMS int64, ocrErr error, refresh bool, captured ...*evidence) decision {
+	defer func() {
+		if len(captured) > 0 && captured[0] != nil { *captured[0] = e }
+	}()
 	choice := s.sortIndex.proposedLocation(path, e, assessment{}, false)
 	var followup string
 	if !choice.Clear && opts.Evidence.DeepenOn == "sparse_or_ambiguous" && !pre.Deepened &&

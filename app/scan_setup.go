@@ -45,7 +45,8 @@ func (start scanStartOptions) configure(opts *scanSettings, include []string) er
 		opts.Scope.Subfolders = *start.Subfolders
 	}
 	if start.Fresh {
-		opts.Cache = cacheSettings{}
+		opts.Cache.ReuseEvidence = false
+		opts.Cache.ReuseAssessment = false
 	}
 	return nil
 }

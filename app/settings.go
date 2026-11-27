@@ -65,6 +65,7 @@ type recoverySettings struct {
 type cacheSettings struct {
 	ReuseEvidence   bool `json:"reuse_evidence"`
 	ReuseAssessment bool `json:"reuse_assessment"`
+	KeepRunEvidence bool `json:"keep_run_evidence"`
 }
 
 type executionSettings struct {
@@ -94,7 +95,7 @@ func defaultSettings() scanSettings {
 		AI:        aiSettings{"configured", "", 300, 180, "unresolved", false},
 		Resources: resourceSettings{3, 4, 1, 192, "below_normal"},
 		Recovery:  recoverySettings{"propose_with_warning", 1, 1, 0},
-		Cache:     cacheSettings{true, true},
+		Cache:     cacheSettings{ReuseEvidence: true, ReuseAssessment: true},
 		Execution: executionSettings{Mode: "review", AutoKinds: []string{"article", "academic_book", "book", "course_paper"}},
 	}
 }
@@ -168,6 +169,7 @@ var settingsSpecs = map[string]settingSpec{
 	"recovery.pause_after":         rangeSpec("Pause after consecutive AI failures (0 means continue)", 0, 20),
 	"cache.reuse_evidence":         {Label: "Reuse saved evidence"},
 	"cache.reuse_assessment":       {Label: "Reuse unchanged model assessments"},
+	"cache.keep_run_evidence":      {Label: "Keep searchable sampled evidence in saved runs (local, opt-in)"},
 	"execution.mode":               choiceSpec("File changes", "preview_only", "review", "automatic"),
 	"execution.auto_kinds":         {Label: "Allowed automatic categories"},
 	"execution.metadata":           {Label: "Propose metadata edits"},
